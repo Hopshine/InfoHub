@@ -1,0 +1,11 @@
+.env
+*.pyc
+__pycache__/
+*.log
+logs/
+data/*.db
+reports/
+.vscode/
+.idea/
+*.swp
+*.swo

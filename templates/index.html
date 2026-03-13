@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>InfoHub - 微信公众号信息收集与分析系统</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="container">
+        <!-- 头部 -->
+        <header class="header">
+            <h1>📊 InfoHub</h1>
+            <p class="subtitle">微信公众号信息收集与分析系统</p>
+        </header>
+
+        <!-- 统计卡片 -->
+        <div class="stats-container">
+            <div class="stat-card">
+                <div class="stat-icon">📚</div>
+                <div class="stat-content">
+                    <div class="stat-value" id="total-articles">-</div>
+                    <div class="stat-label">文章总数</div>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon">✅</div>
+                <div class="stat-content">
+                    <div class="stat-value" id="analyzed-articles">-</div>
+                    <div class="stat-label">已分析</div>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon">⏳</div>
+                <div class="stat-content">
+                    <div class="stat-value" id="pending-articles">-</div>
+                    <div class="stat-label">待分析</div>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon">🏷️</div>
+                <div class="stat-content">
+                    <div class="stat-value" id="categories-count">-</div>
+                    <div class="stat-label">分类数量</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 操作按钮 -->
+        <div class="actions">
+            <button class="btn btn-primary" onclick="refreshData()">
+                🔄 刷新数据
+            </button>
+            <button class="btn btn-warning" onclick="showCollectModal()">
+                📥 采集文章
+            </button>
+            <button class="btn btn-success" onclick="analyzeBatch()">
+                🤖 批量分析
+            </button>
+            <button class="btn btn-info" onclick="showCategories()">
+                📊 分类统计
+            </button>
+        </div>
+
+        <!-- 文章列表 -->
+        <div class="articles-section">
+            <h2>文章列表</h2>
+            <div class="filter-bar">
+                <input type="text" id="search-input" placeholder="搜索文章标题..."
+                       onkeyup="filterArticles()">
+                <select id="category-filter" onchange="filterArticles()">
+                    <option value="">全部分类</option>
+                </select>
+            </div>
+            <div id="articles-list" class="articles-list">
+                <div class="loading">加载中...</div>
+            </div>
+            <div class="pagination">
+                <button class="btn btn-sm" onclick="prevPage()">上一页</button>
+                <span id="page-info">第 1 页</span>
+                <button class="btn btn-sm" onclick="nextPage()">下一页</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 文章详情模态框 -->
+    <div id="article-modal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeModal()">&times;</span>
+            <div id="article-detail"></div>
+        </div>
+    </div>
+
+    <!-- 分类统计模态框 -->
+    <div id="categories-modal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeCategoriesModal()">&times;</span>
+            <h2>分类统计</h2>
+            <div id="categories-chart"></div>
+        </div>
+    </div>
+
+    <!-- 采集文章模态框 -->
+    <div id="collect-modal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeCollectModal()">&times;</span>
+            <h2>📥 采集文章</h2>
+
+            <div class="collect-tabs">
+                <button class="tab-btn active" onclick="switchCollectTab('url')">单个URL</button>
+                <button class="tab-btn" onclick="switchCollectTab('batch')">批量URL</button>
+                <button class="tab-btn" onclick="switchCollectTab('search')">搜索采集</button>
+            </div>
+
+            <!-- 单个URL采集 -->
+            <div id="collect-url-tab" class="collect-tab-content active">
+                <p class="tab-desc">输入微信文章URL进行采集</p>
+                <input type="text" id="single-url-input" class="url-input"
+                       placeholder="https://mp.weixin.qq.com/s/xxxxx">
+                <button class="btn btn-success" onclick="collectSingleUrl()">
+                    开始采集
+                </button>
+            </div>
+
+            <!-- 批量URL采集 -->
+            <div id="collect-batch-tab" class="collect-tab-content">
+                <p class="tab-desc">每行一个URL，支持批量采集</p>
+                <textarea id="batch-urls-input" class="urls-textarea"
+                          placeholder="https://mp.weixin.qq.com/s/xxxxx&#10;https://mp.weixin.qq.com/s/yyyyy&#10;https://mp.weixin.qq.com/s/zzzzz"
+                          rows="8"></textarea>
+                <button class="btn btn-success" onclick="collectBatchUrls()">
+                    批量采集
+                </button>
+            </div>
+
+            <!-- 搜索采集 -->
+            <div id="collect-search-tab" class="collect-tab-content">
+                <p class="tab-desc">搜索关键词并采集文章（可能遇到验证码）</p>
+                <input type="text" id="search-keyword-input" class="url-input"
+                       placeholder="输入搜索关键词，如：Claude、GPT、大模型">
+                <input type="number" id="search-max-input" class="url-input"
+                       placeholder="最多采集数量（建议不超过10）" value="5" min="1" max="20">
+                <button class="btn btn-success" onclick="collectFromSearch()">
+                    搜索并采集
+                </button>
+            </div>
+
+            <!-- 采集进度 -->
+            <div id="crawl-progress" style="display:none;">
+                <div class="progress-header">
+                    <span id="progress-step">初始化中...</span>
+                    <span id="progress-count">0/0</span>
+                </div>
+                <div class="progress-bar-container">
+                    <div id="progress-bar" class="progress-bar" style="width:0%"></div>
+                </div>
+                <div id="progress-items" class="progress-items"></div>
+                <button id="cancel-crawl-btn" class="btn btn-danger" onclick="cancelCrawl()">取消采集</button>
+            </div>
+
+            <div id="collect-result" class="collect-result"></div>
+        </div>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

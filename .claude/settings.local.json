@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls -lh *.md *.py *.txt)",
+      "Bash(wc -l **/*.py 2>/dev/null | tail -1)",
+      "Bash(python demo.py)",
+      "Bash(pip install:*)",
+      "Bash(python -c \"import sqlite3; conn = sqlite3.connect\\('data/demo.db'\\); cursor = conn.cursor\\(\\); cursor.execute\\('SELECT id, title, account_name FROM articles'\\); print\\('\\\\n演示数据库中的文章:\\\\n'\\); print\\('ID | 标题 | 公众号'\\); print\\('-' * 60\\); [print\\(f'{row[0]} | {row[1][:30]}... | {row[2]}'\\) for row in cursor.fetchall\\(\\)]; conn.close\\(\\)\")",
+      "Bash(python -c \"import sqlite3; conn = sqlite3.connect\\('data/demo.db'\\); cursor = conn.cursor\\(\\); cursor.execute\\('SELECT COUNT\\(*\\) FROM articles'\\); print\\('Total articles:', cursor.fetchone\\(\\)[0]\\); conn.close\\(\\)\")",
+      "Bash(echo -e \"1\\\\n1\" | python view_db.py)",
+      "Bash(echo -e \"1\\\\n2\\\\n1\" | python view_db.py)",
+      "Bash(python -c \"\nimport sqlite3\nimport sys\nimport io\nif sys.platform == 'win32':\n    sys.stdout = io.TextIOWrapper\\(sys.stdout.buffer, encoding='utf-8', errors='replace'\\)\n\nconn = sqlite3.connect\\('data/demo.db'\\)\nconn.row_factory = sqlite3.Row\ncursor = conn.cursor\\(\\)\ncursor.execute\\('SELECT * FROM articles WHERE id = 1'\\)\narticle = cursor.fetchone\\(\\)\n\nprint\\('=' * 70\\)\nprint\\(f'文章详情 [ID: {article[\\\\\"id\\\\\"]}]'\\)\nprint\\('=' * 70\\)\nprint\\(f'\\\\n标题: {article[\\\\\"title\\\\\"]}'\\)\nprint\\(f'公众号: {article[\\\\\"account_name\\\\\"]}'\\)\nprint\\(f'发布时间: {article[\\\\\"publish_time\\\\\"]}'\\)\nprint\\(f'\\\\n内容预览:'\\)\nprint\\(article['content'][:300]\\)\nprint\\('...'\\)\nconn.close\\(\\)\n\")",
+      "Bash(python web_app.py)",
+      "Bash(curl -s http://localhost:5000/api/stats | head -20)",
+      "Bash(wc -l *.py **/*.py **/*.html **/*.css **/*.js 2>/dev/null | tail -1)",
+      "Bash(sleep 3 && curl -s http://localhost:5000/api/stats | head -5)",
+      "Bash(curl -s http://localhost:5000/api/stats)",
+      "Bash(python -c \"\nfrom collector.wechat_collector_v2 import WeChatCollectorV2\nimport sys\nimport io\nif sys.platform == 'win32':\n    sys.stdout = io.TextIOWrapper\\(sys.stdout.buffer, encoding='utf-8', errors='replace'\\)\n\ncollector = WeChatCollectorV2\\(\\)\nprint\\('测试搜索功能...'\\)\narticles = collector.search_articles_sogou\\('AI日报', max_results=3\\)\n\nif articles:\n    print\\(f'\\\\n搜索到 {len\\(articles\\)} 篇文章:'\\)\n    for i, a in enumerate\\(articles, 1\\):\n        print\\(f'\\\\n{i}. {a[\\\\\"title\\\\\"]}'\\)\n        print\\(f'   URL: {a[\\\\\"url\\\\\"][:80]}...'\\)\n        print\\(f'   公众号: {a[\\\\\"account_name\\\\\"]}'\\)\nelse:\n    print\\('\\\\n未搜索到文章或遇到验证码'\\)\n\")",
+      "Bash(curl -s \"https://weixin.sogou.com/\" -H \"User-Agent: Mozilla/5.0 \\(Windows NT 10.0; Win64; x64\\) AppleWebKit/537.36\" | grep -o \"<title>.*</title>\" | head -1)",
+      "Bash(python test_sogou_full.py)",
+      "Bash(curl -s -X POST http://localhost:5000/api/collect/search -H \"Content-Type: application/json\" -d '{\"keyword\": \"AI日报\", \"max_results\": 3}')",
+      "Bash(python -c \"\nimport requests, sys, io, json\nif sys.platform == 'win32':\n    sys.stdout = io.TextIOWrapper\\(sys.stdout.buffer, encoding='utf-8', errors='replace'\\)\n\nr = requests.post\\('http://localhost:5000/api/collect/search', json={'keyword': 'AI日报', 'max_results': 3}, timeout=120\\)\ndata = r.json\\(\\)\nprint\\(json.dumps\\(data, ensure_ascii=False, indent=2\\)\\)\n\")",
+      "Bash(python -c \"import py_compile; [py_compile.compile\\(f, doraise=True\\) for f in ['C:/Users/Administrator/code/infoHub/crawler/__init__.py', 'C:/Users/Administrator/code/infoHub/crawler/rate_limiter.py', 'C:/Users/Administrator/code/infoHub/crawler/dedup.py', 'C:/Users/Administrator/code/infoHub/crawler/session.py', 'C:/Users/Administrator/code/infoHub/crawler/job_manager.py', 'C:/Users/Administrator/code/infoHub/crawler/engine.py']]; print\\('All files compile OK'\\)\")",
+      "Bash(wc -l \"C:/Users/Administrator/code/infoHub/crawler/engine.py\" && python -c \"import py_compile; py_compile.compile\\('C:/Users/Administrator/code/infoHub/crawler/engine.py', doraise=True\\); print\\('Syntax OK'\\)\")",
+      "Bash(python -c \"\nimport py_compile, sys, os\nfiles = []\nfor root, dirs, fnames in os.walk\\('crawler'\\):\n    for f in fnames:\n        if f.endswith\\('.py'\\):\n            files.append\\(os.path.join\\(root, f\\)\\)\nfiles += ['storage/database.py', 'config.py', 'web_app.py']\nerrors = []\nfor f in files:\n    try:\n        py_compile.compile\\(f, doraise=True\\)\n        print\\(f'OK: {f}'\\)\n    except py_compile.PyCompileError as e:\n        errors.append\\(str\\(e\\)\\)\n        print\\(f'ERROR: {f}: {e}'\\)\nif errors:\n    sys.exit\\(1\\)\nprint\\('All files OK'\\)\n\")",
+      "Bash(gh auth:*)",
+      "Bash(git config:*)",
+      "Bash(git init:*)"
+    ]
+  }
+}
