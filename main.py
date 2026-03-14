@@ -176,7 +176,7 @@ def main():
         # 初始化组件
         db = Database(Config.DATABASE_PATH)
         collector = WeChatCollector()
-        analyzer = ContentAnalyzer(Config.ANTHROPIC_API_KEY)
+        analyzer = ContentAnalyzer()
 
         logger.info("InfoHub 微信公众号信息收集系统")
         logger.info("=" * 50)

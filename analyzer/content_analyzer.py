@@ -1,4 +1,3 @@
-from anthropic import Anthropic
 from typing import Dict
 from utils.logger import setup_logger
 from config import Config
@@ -6,11 +5,26 @@ from config import Config
 logger = setup_logger('analyzer')
 
 class ContentAnalyzer:
-    """内容分析器，使用Claude API分析文章"""
+    """内容分析器，支持 Anthropic 和 OpenAI 兼容 API"""
 
-    def __init__(self, api_key: str):
-        self.client = Anthropic(api_key=api_key)
+    def __init__(self, api_key: str = None, base_url: str = None, provider: str = None):
+        self.provider = provider or Config.LLM_PROVIDER
+        self.api_key = api_key or Config.LLM_API_KEY
+        self.base_url = base_url or Config.LLM_BASE_URL
         self.model = Config.ANALYSIS_MODEL
+
+        if self.provider == 'openai':
+            from openai import OpenAI
+            kwargs = {'api_key': self.api_key}
+            if self.base_url:
+                kwargs['base_url'] = self.base_url
+            self.client = OpenAI(**kwargs)
+        else:
+            from anthropic import Anthropic
+            kwargs = {'api_key': self.api_key}
+            if self.base_url:
+                kwargs['base_url'] = self.base_url
+            self.client = Anthropic(**kwargs)
 
     def analyze_article(self, article: Dict) -> Dict:
         """分析单篇文章"""
@@ -31,15 +45,24 @@ class ContentAnalyzer:
         try:
             prompt = self._build_analysis_prompt(title, content)
 
-            message = self.client.messages.create(
-                model=self.model,
-                max_tokens=2000,
-                messages=[
-                    {"role": "user", "content": prompt}
-                ]
-            )
-
-            response_text = message.content[0].text
+            if self.provider == 'openai':
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    max_tokens=2000,
+                    messages=[
+                        {"role": "user", "content": prompt}
+                    ]
+                )
+                response_text = response.choices[0].message.content
+            else:
+                message = self.client.messages.create(
+                    model=self.model,
+                    max_tokens=2000,
+                    messages=[
+                        {"role": "user", "content": prompt}
+                    ]
+                )
+                response_text = message.content[0].text
             result = self._parse_analysis_result(response_text)
 
             logger.info(f"文章分析完成: {title}")

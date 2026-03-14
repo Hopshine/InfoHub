@@ -111,8 +111,8 @@ def analyze_article(article_id):
     """分析单篇文章"""
     try:
         # 检查API Key
-        if not Config.ANTHROPIC_API_KEY:
-            return jsonify({'success': False, 'error': '未配置ANTHROPIC_API_KEY'})
+        if not Config.LLM_API_KEY:
+            return jsonify({'success': False, 'error': '未配置LLM_API_KEY'})
 
         # 获取文章
         import sqlite3
@@ -127,7 +127,7 @@ def analyze_article(article_id):
             return jsonify({'success': False, 'error': '文章不存在'})
 
         # 分析
-        analyzer = ContentAnalyzer(Config.ANTHROPIC_API_KEY)
+        analyzer = ContentAnalyzer()
         result = analyzer.analyze_article(dict(article))
 
         # 更新数据库
@@ -150,13 +150,13 @@ def analyze_article(article_id):
 def analyze_batch():
     """批量分析文章"""
     try:
-        if not Config.ANTHROPIC_API_KEY:
-            return jsonify({'success': False, 'error': '未配置ANTHROPIC_API_KEY'})
+        if not Config.LLM_API_KEY:
+            return jsonify({'success': False, 'error': '未配置LLM_API_KEY'})
 
         limit = int(request.json.get('limit', 10))
         unanalyzed = db.get_unanalyzed_articles(limit=limit)
 
-        analyzer = ContentAnalyzer(Config.ANTHROPIC_API_KEY)
+        analyzer = ContentAnalyzer()
         results = []
 
         for article in unanalyzed:
