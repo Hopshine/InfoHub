@@ -4,6 +4,7 @@ let allArticles = [];
 let statsData = {};
 let currentJobId = null;
 let sseSource = null;
+let selectedArticles = new Set();
 
 // 页面加载时初始化
 document.addEventListener('DOMContentLoaded', function() {
@@ -82,30 +83,41 @@ function displayArticles(articles) {
     }
 
     listElement.innerHTML = articles.map(article => `
-        <div class="article-item" onclick="showArticleDetail(${article.id})">
-            <div class="article-header">
-                <div class="article-title">${escapeHtml(article.title)}</div>
-                <span class="article-status ${article.analysis ? 'status-analyzed' : 'status-pending'}">
-                    ${article.analysis ? '已分析' : '待分析'}
-                </span>
+        <div class="article-item">
+            <div class="article-checkbox">
+                <input type="checkbox"
+                       class="article-select-checkbox"
+                       data-article-id="${article.id}"
+                       onchange="toggleArticleSelection(${article.id})"
+                       ${selectedArticles.has(article.id) ? 'checked' : ''}>
             </div>
-            <div class="article-meta">
-                <span>📱 ${escapeHtml(article.account_name || '未知')}</span>
-                <span>📅 ${article.publish_time || '未知'}</span>
-                ${article.category ? `<span>🏷️ ${escapeHtml(article.category)}</span>` : ''}
-            </div>
-            ${article.summary ? `
-                <div class="article-summary">${escapeHtml(article.summary)}</div>
-            ` : ''}
-            ${article.keywords ? `
-                <div class="article-tags">
-                    ${article.keywords.split(',').map(k =>
-                        `<span class="tag">${escapeHtml(k.trim())}</span>`
-                    ).join('')}
+            <div class="article-content" onclick="showArticleDetail(${article.id})">
+                <div class="article-header">
+                    <div class="article-title">${escapeHtml(article.title)}</div>
+                    <span class="article-status ${article.analysis ? 'status-analyzed' : 'status-pending'}">
+                        ${article.analysis ? '已分析' : '待分析'}
+                    </span>
                 </div>
-            ` : ''}
+                <div class="article-meta">
+                    <span>📱 ${escapeHtml(article.account_name || '未知')}</span>
+                    <span>📅 ${article.publish_time || '未知'}</span>
+                    ${article.category ? `<span>🏷️ ${escapeHtml(article.category)}</span>` : ''}
+                </div>
+                ${article.summary ? `
+                    <div class="article-summary">${escapeHtml(article.summary)}</div>
+                ` : ''}
+                ${article.keywords ? `
+                    <div class="article-tags">
+                        ${article.keywords.split(',').map(k =>
+                            `<span class="tag">${escapeHtml(k.trim())}</span>`
+                        ).join('')}
+                    </div>
+                ` : ''}
+            </div>
         </div>
     `).join('');
+
+    updateBulkActionsBar();
 }
 
 // 更新分页信息
@@ -160,7 +172,7 @@ async function showArticleDetail(articleId) {
                 ${article.analysis ? `
                     <div class="detail-section">
                         <h3>🔍 深度分析</h3>
-                        <p style="white-space: pre-wrap;">${escapeHtml(article.analysis)}</p>
+                        <div class="markdown-body">${renderMarkdown(article.analysis)}</div>
                     </div>
                 ` : ''}
 
@@ -171,11 +183,16 @@ async function showArticleDetail(articleId) {
                     </div>
                 ` : ''}
 
-                ${!article.analysis ? `
-                    <button class="btn btn-success" onclick="analyzeArticle(${article.id})">
-                        🤖 立即分析
+                <div class="detail-actions">
+                    ${!article.analysis ? `
+                        <button class="btn btn-success" onclick="analyzeArticle(${article.id})">
+                            🤖 立即分析
+                        </button>
+                    ` : ''}
+                    <button class="btn btn-danger" onclick="deleteArticle(${article.id})">
+                        🗑️ 删除文章
                     </button>
-                ` : ''}
+                </div>
 
                 <p style="margin-top: 20px; color: #666;">
                     <a href="${article.url}" target="_blank" style="color: #667eea;">查看原文 →</a>
@@ -613,4 +630,171 @@ async function cancelCrawl() {
     } catch (error) {
         console.error('取消失败:', error);
     }
+}
+
+// ==================== 多选与批量操作 ====================
+
+// 切换文章选择
+function toggleArticleSelection(articleId) {
+    if (selectedArticles.has(articleId)) {
+        selectedArticles.delete(articleId);
+    } else {
+        selectedArticles.add(articleId);
+    }
+    updateBulkActionsBar();
+    updateSelectAllCheckbox();
+}
+
+// 全选/取消全选
+function toggleSelectAll() {
+    const checkbox = document.getElementById('select-all-checkbox');
+    const checkboxes = document.querySelectorAll('.article-select-checkbox');
+
+    if (checkbox.checked) {
+        checkboxes.forEach(cb => {
+            const articleId = parseInt(cb.dataset.articleId);
+            selectedArticles.add(articleId);
+            cb.checked = true;
+        });
+    } else {
+        selectedArticles.clear();
+        checkboxes.forEach(cb => cb.checked = false);
+    }
+
+    updateBulkActionsBar();
+}
+
+// 更新全选复选框状态
+function updateSelectAllCheckbox() {
+    const checkbox = document.getElementById('select-all-checkbox');
+    const checkboxes = document.querySelectorAll('.article-select-checkbox');
+    const allChecked = checkboxes.length > 0 && Array.from(checkboxes).every(cb => cb.checked);
+    checkbox.checked = allChecked;
+}
+
+// 更新批量操作栏
+function updateBulkActionsBar() {
+    const bar = document.getElementById('bulk-actions-bar');
+    const count = document.getElementById('selected-count');
+
+    if (selectedArticles.size > 0) {
+        bar.style.display = 'block';
+        count.textContent = `已选择 ${selectedArticles.size} 篇文章`;
+    } else {
+        bar.style.display = 'none';
+    }
+}
+
+// 清除选择
+function clearSelection() {
+    selectedArticles.clear();
+    document.querySelectorAll('.article-select-checkbox').forEach(cb => cb.checked = false);
+    document.getElementById('select-all-checkbox').checked = false;
+    updateBulkActionsBar();
+}
+
+// 批量删除
+async function bulkDelete() {
+    if (selectedArticles.size === 0) {
+        alert('请先选择要删除的文章');
+        return;
+    }
+
+    if (!confirm(`确定要删除选中的 ${selectedArticles.size} 篇文章吗？此操作不可恢复。`)) {
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/articles/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ article_ids: Array.from(selectedArticles) })
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+            alert(`成功删除 ${result.data.deleted_count} 篇文章`);
+            clearSelection();
+            refreshData();
+        } else {
+            alert('删除失败: ' + result.error);
+        }
+    } catch (error) {
+        console.error('删除失败:', error);
+        alert('删除失败，请重试');
+    }
+}
+
+// 批量分析选中文章
+async function bulkAnalyze() {
+    if (selectedArticles.size === 0) {
+        alert('请先选择要分析的文章');
+        return;
+    }
+
+    if (!confirm(`确定要分析选中的 ${selectedArticles.size} 篇文章吗？这将调用Claude API并产生费用。`)) {
+        return;
+    }
+
+    const articleIds = Array.from(selectedArticles);
+    let successCount = 0;
+    let failCount = 0;
+
+    for (const articleId of articleIds) {
+        try {
+            const response = await fetch(`/api/analyze/${articleId}`, {
+                method: 'POST'
+            });
+            const result = await response.json();
+
+            if (result.success) {
+                successCount++;
+            } else {
+                failCount++;
+            }
+        } catch (error) {
+            console.error(`分析文章 ${articleId} 失败:`, error);
+            failCount++;
+        }
+    }
+
+    alert(`批量分析完成！\n成功: ${successCount} 篇\n失败: ${failCount} 篇`);
+    clearSelection();
+    refreshData();
+}
+
+// 删除单篇文章
+async function deleteArticle(articleId) {
+    if (!confirm('确定要删除这篇文章吗？此操作不可恢复。')) {
+        return;
+    }
+
+    try {
+        const response = await fetch(`/api/article/${articleId}`, {
+            method: 'DELETE'
+        });
+        const result = await response.json();
+
+        if (result.success) {
+            alert('删除成功');
+            closeModal();
+            refreshData();
+        } else {
+            alert('删除失败: ' + result.error);
+        }
+    } catch (error) {
+        console.error('删除失败:', error);
+        alert('删除失败，请重试');
+    }
+}
+
+// 渲染Markdown
+function renderMarkdown(text) {
+    if (!text) return '';
+    if (typeof marked === 'undefined' || typeof DOMPurify === 'undefined') {
+        return escapeHtml(text);
+    }
+    const html = marked.parse(text);
+    return DOMPurify.sanitize(html);
 }

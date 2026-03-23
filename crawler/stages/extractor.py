@@ -44,21 +44,58 @@ class ExtractorStage:
 
             # 发布时间
             publish_time = ''
-            # 尝试从script中提取
+            # 尝试从script中提取（多种格式）
             scripts = soup.find_all('script')
             for script in scripts:
                 if script.string and 'publish_time' in script.string:
+                    # 格式1: var publish_time = "1234567890"
                     match = re.search(r'var\s+publish_time\s*=\s*["\'](\d+)["\']', script.string)
+                    if not match:
+                        # 格式2: publish_time = "1234567890"
+                        match = re.search(r'publish_time\s*=\s*["\'](\d+)["\']', script.string)
+                    if not match:
+                        # 格式3: "publish_time":"1234567890"
+                        match = re.search(r'["\']publish_time["\']\s*:\s*["\'](\d+)["\']', script.string)
+                    if not match:
+                        # 格式4: ct = 1234567890
+                        match = re.search(r'\bct\s*=\s*(\d{10})', script.string)
+                    if not match:
+                        # 格式5: createTime = "1234567890"
+                        match = re.search(r'createTime\s*=\s*["\'](\d+)["\']', script.string)
+
                     if match:
                         import datetime
                         ts = int(match.group(1))
                         publish_time = datetime.datetime.fromtimestamp(ts).strftime('%Y-%m-%d %H:%M:%S')
                         break
+
             # 备选：从页面元素提取
             if not publish_time:
                 time_tag = soup.select_one('#publish_time') or soup.select_one('em.rich_media_meta_text')
                 if time_tag:
                     publish_time = time_tag.get_text(strip=True)
+
+            # 备选：从meta标签提取
+            if not publish_time:
+                meta_time = soup.find('meta', property='article:published_time')
+                if meta_time:
+                    publish_time = meta_time.get('content', '').strip()
+
+            # 备选：从URL的timestamp参数提取（如果其他方法都失败）
+            if not publish_time and url:
+                import urllib.parse
+                parsed = urllib.parse.urlparse(url)
+                params = urllib.parse.parse_qs(parsed.query)
+                if 'timestamp' in params:
+                    try:
+                        import datetime
+                        ts = int(params['timestamp'][0])
+                        # 验证时间戳是否合理（2020-2030年之间）
+                        if 1577836800 < ts < 1893456000:
+                            publish_time = datetime.datetime.fromtimestamp(ts).strftime('%Y-%m-%d %H:%M:%S')
+                    except:
+                        pass
+
             article['publish_time'] = publish_time
 
             # 正文内容

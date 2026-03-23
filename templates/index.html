@@ -5,6 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>InfoHub - 微信公众号信息收集与分析系统</title>
     <link rel="stylesheet" href="/static/css/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/marked@11.1.1/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.8/dist/purify.min.js"></script>
 </head>
 <body>
     <div class="container">
@@ -62,9 +64,35 @@
             </button>
         </div>
 
+        <!-- 批量操作栏 -->
+        <div id="bulk-actions-bar" class="bulk-actions-bar" style="display:none;">
+            <div class="bulk-actions-content">
+                <span id="selected-count">已选择 0 篇文章</span>
+                <div class="bulk-actions-buttons">
+                    <button class="btn btn-sm btn-danger" onclick="bulkDelete()">
+                        🗑️ 删除选中
+                    </button>
+                    <button class="btn btn-sm btn-success" onclick="bulkAnalyze()">
+                        🤖 分析选中
+                    </button>
+                    <button class="btn btn-sm" onclick="clearSelection()">
+                        取消选择
+                    </button>
+                </div>
+            </div>
+        </div>
+
         <!-- 文章列表 -->
         <div class="articles-section">
-            <h2>文章列表</h2>
+            <div class="articles-header">
+                <h2>文章列表</h2>
+                <div class="select-all-container">
+                    <label>
+                        <input type="checkbox" id="select-all-checkbox" onchange="toggleSelectAll()">
+                        全选
+                    </label>
+                </div>
+            </div>
             <div class="filter-bar">
                 <input type="text" id="search-input" placeholder="搜索文章标题..."
                        onkeyup="filterArticles()">

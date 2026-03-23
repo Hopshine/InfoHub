@@ -219,3 +219,24 @@ class Database:
         row = cursor.fetchone()
         conn.close()
         return dict(row) if row else None
+
+    def delete_article(self, article_id: int) -> bool:
+        """删除单篇文章"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM articles WHERE id = ?', (article_id,))
+        deleted = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return deleted
+
+    def delete_articles(self, article_ids: List[int]) -> int:
+        """批量删除文章，返回删除数量"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        placeholders = ','.join('?' * len(article_ids))
+        cursor.execute(f'DELETE FROM articles WHERE id IN ({placeholders})', article_ids)
+        deleted_count = cursor.rowcount
+        conn.commit()
+        conn.close()
+        return deleted_count

@@ -25,7 +25,15 @@
       "Bash(python -c \"\nimport py_compile, sys, os\nfiles = []\nfor root, dirs, fnames in os.walk\\('crawler'\\):\n    for f in fnames:\n        if f.endswith\\('.py'\\):\n            files.append\\(os.path.join\\(root, f\\)\\)\nfiles += ['storage/database.py', 'config.py', 'web_app.py']\nerrors = []\nfor f in files:\n    try:\n        py_compile.compile\\(f, doraise=True\\)\n        print\\(f'OK: {f}'\\)\n    except py_compile.PyCompileError as e:\n        errors.append\\(str\\(e\\)\\)\n        print\\(f'ERROR: {f}: {e}'\\)\nif errors:\n    sys.exit\\(1\\)\nprint\\('All files OK'\\)\n\")",
       "Bash(gh auth:*)",
       "Bash(git config:*)",
-      "Bash(git init:*)"
+      "Bash(git init:*)",
+      "Bash(git commit:*)",
+      "Bash(git remote:*)",
+      "Bash(git add:*)",
+      "Bash(git push:*)",
+      "Bash(python -c \"from storage.database import Database; db = Database\\('data/test.db'\\); print\\('Database methods:', [m for m in dir\\(db\\) if 'delete' in m.lower\\(\\)]\\)\")",
+      "Bash(python fix_publish_time.py 2>&1 | head -50)",
+      "Bash(python fix_publish_time.py 2>&1 | head -100)",
+      "Bash(python -c \"\nfrom storage.database import Database\nimport os\n\ndb_path = 'data/demo.db' if os.path.exists\\('data/demo.db'\\) else 'data/infohub.db'\ndb = Database\\(db_path\\)\n\narticles = db.get_all_articles\\(limit=10\\)\nprint\\('Sample articles with publish_time:'\\)\nprint\\('=' * 80\\)\nfor article in articles[:5]:\n    title = article['title'][:50] if article['title'] else 'No title'\n    pub_time = article.get\\('publish_time', 'None'\\)\n    print\\(f'Title: {title}'\\)\n    print\\(f'Publish Time: {pub_time}'\\)\n    print\\('-' * 80\\)\n\")"
     ]
   }
 }

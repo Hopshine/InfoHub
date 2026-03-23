@@ -106,6 +106,33 @@ def get_article(article_id):
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
+@app.route('/api/article/<int:article_id>', methods=['DELETE'])
+def delete_article(article_id):
+    """删除单篇文章"""
+    try:
+        if db.delete_article(article_id):
+            return jsonify({'success': True, 'message': '删除成功'})
+        else:
+            return jsonify({'success': False, 'error': '文章不存在'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/articles/delete', methods=['POST'])
+def delete_articles():
+    """批量删除文章"""
+    try:
+        article_ids = request.json.get('article_ids', [])
+        if not article_ids:
+            return jsonify({'success': False, 'error': '未选择文章'})
+
+        deleted_count = db.delete_articles(article_ids)
+        return jsonify({
+            'success': True,
+            'data': {'deleted_count': deleted_count}
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
 @app.route('/api/analyze/<int:article_id>', methods=['POST'])
 def analyze_article(article_id):
     """分析单篇文章"""

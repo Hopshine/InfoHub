@@ -88,6 +88,21 @@ class WeChatCollectorV2:
             # 提取发布时间
             publish_time = self._extract_publish_time(soup)
 
+            # 如果从HTML中提取失败，尝试从URL参数提取
+            if not publish_time:
+                import urllib.parse
+                parsed = urllib.parse.urlparse(url)
+                params = urllib.parse.parse_qs(parsed.query)
+                if 'timestamp' in params:
+                    try:
+                        import datetime
+                        ts = int(params['timestamp'][0])
+                        # 验证时间戳是否合理（2020-2030年之间）
+                        if 1577836800 < ts < 1893456000:
+                            publish_time = datetime.datetime.fromtimestamp(ts).strftime('%Y-%m-%d %H:%M:%S')
+                    except:
+                        pass
+
             # 提取文章内容
             content = self._extract_content(soup)
 
@@ -172,14 +187,37 @@ class WeChatCollectorV2:
         if time_elem:
             return time_elem.get_text(strip=True)
 
-        # 方法3: 从script中提取
+        # 方法3: 从script中提取（多种格式）
         scripts = soup.find_all('script')
         for script in scripts:
-            if script.string and 'publish_time' in script.string:
-                match = re.search(r'publish_time\s*=\s*"([^"]+)"', script.string)
-                if match:
-                    return match.group(1)
+            if script.string:
+                # 格式1: var publish_time = "1234567890"
+                match = re.search(r'var\s+publish_time\s*=\s*["\'](\d+)["\']', script.string)
+                if not match:
+                    # 格式2: publish_time = "1234567890"
+                    match = re.search(r'publish_time\s*=\s*["\'](\d+)["\']', script.string)
+                if not match:
+                    # 格式3: "publish_time":"1234567890"
+                    match = re.search(r'["\']publish_time["\']\s*:\s*["\'](\d+)["\']', script.string)
+                if not match:
+                    # 格式4: ct = 1234567890
+                    match = re.search(r'\bct\s*=\s*(\d{10})', script.string)
+                if not match:
+                    # 格式5: createTime = "1234567890"
+                    match = re.search(r'createTime\s*=\s*["\'](\d+)["\']', script.string)
 
+                if match:
+                    import datetime
+                    ts = int(match.group(1))
+                    return datetime.datetime.fromtimestamp(ts).strftime('%Y-%m-%d %H:%M:%S')
+
+        # 方法4: 从meta标签提取
+        meta_time = soup.find('meta', property='article:published_time')
+        if meta_time:
+            return meta_time.get('content', '').strip()
+
+        # 方法5: 从URL的timestamp参数提取（最后的备选方案）
+        # 注意：这个方法需要在调用处传入URL
         return ''
 
     def _extract_content(self, soup: BeautifulSoup) -> str:
