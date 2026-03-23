@@ -33,7 +33,11 @@
       "Bash(python -c \"from storage.database import Database; db = Database\\('data/test.db'\\); print\\('Database methods:', [m for m in dir\\(db\\) if 'delete' in m.lower\\(\\)]\\)\")",
       "Bash(python fix_publish_time.py 2>&1 | head -50)",
       "Bash(python fix_publish_time.py 2>&1 | head -100)",
-      "Bash(python -c \"\nfrom storage.database import Database\nimport os\n\ndb_path = 'data/demo.db' if os.path.exists\\('data/demo.db'\\) else 'data/infohub.db'\ndb = Database\\(db_path\\)\n\narticles = db.get_all_articles\\(limit=10\\)\nprint\\('Sample articles with publish_time:'\\)\nprint\\('=' * 80\\)\nfor article in articles[:5]:\n    title = article['title'][:50] if article['title'] else 'No title'\n    pub_time = article.get\\('publish_time', 'None'\\)\n    print\\(f'Title: {title}'\\)\n    print\\(f'Publish Time: {pub_time}'\\)\n    print\\('-' * 80\\)\n\")"
+      "Bash(python -c \"\nfrom storage.database import Database\nimport os\n\ndb_path = 'data/demo.db' if os.path.exists\\('data/demo.db'\\) else 'data/infohub.db'\ndb = Database\\(db_path\\)\n\narticles = db.get_all_articles\\(limit=10\\)\nprint\\('Sample articles with publish_time:'\\)\nprint\\('=' * 80\\)\nfor article in articles[:5]:\n    title = article['title'][:50] if article['title'] else 'No title'\n    pub_time = article.get\\('publish_time', 'None'\\)\n    print\\(f'Title: {title}'\\)\n    print\\(f'Publish Time: {pub_time}'\\)\n    print\\('-' * 80\\)\n\")",
+      "Bash(curl:*)",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(''''success:'''', d[''''success'''']\\); t=d.get\\(''''data'''',{}\\).get\\(''''trending'''',{}\\); [print\\(f''''{k}: {len\\(v\\)} items''''\\) for k,v in t.items\\(\\)]\")",
+      "Bash(python -c \":*)",
+      "Bash(python:*)"
     ]
   }
 }

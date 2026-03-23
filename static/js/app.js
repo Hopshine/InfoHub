@@ -10,6 +10,7 @@ let selectedArticles = new Set();
 document.addEventListener('DOMContentLoaded', function() {
     loadStats();
     loadArticles();
+    loadSidebarTrending();
 });
 
 // 加载统计信息
@@ -797,4 +798,55 @@ function renderMarkdown(text) {
     }
     const html = marked.parse(text);
     return DOMPurify.sanitize(html);
+}
+
+// ==================== 首页热点侧边栏 ====================
+
+let sidebarTrendingData = {};
+let currentSidebarPlatform = 'weibo';
+
+async function loadSidebarTrending() {
+    try {
+        const resp = await fetch('/api/trending');
+        const data = await resp.json();
+        if (data.success) {
+            sidebarTrendingData = data.data.trending || {};
+            renderSidebarTrending();
+        }
+    } catch (e) {
+        const list = document.getElementById('sidebar-trending-list');
+        if (list) list.innerHTML = '<div style="padding:20px;color:#a0aec0;text-align:center;">加载失败</div>';
+    }
+}
+
+function switchSidebarTab(platform) {
+    currentSidebarPlatform = platform;
+    document.querySelectorAll('#sidebar-tabs .sidebar-tab').forEach(tab => {
+        tab.classList.toggle('active', tab.textContent.includes(
+            {weibo:'微博',zhihu:'知乎',baidu:'百度',douyin:'抖音'}[platform]
+        ));
+    });
+    renderSidebarTrending();
+}
+
+function renderSidebarTrending() {
+    const list = document.getElementById('sidebar-trending-list');
+    if (!list) return;
+
+    const items = sidebarTrendingData[currentSidebarPlatform] || [];
+
+    if (items.length === 0) {
+        list.innerHTML = '<div style="padding:20px;color:#a0aec0;text-align:center;">暂无数据</div>';
+        return;
+    }
+
+    list.innerHTML = items.slice(0, 15).map(item => {
+        const rank = item.rank_num || item.rank;
+        const rankClass = rank <= 3 ? ` top${rank}` : '';
+        const url = item.url || '#';
+        return `<a class="sidebar-item" href="${url}" target="_blank" rel="noopener">
+            <span class="sidebar-rank${rankClass}">${rank}</span>
+            <span class="sidebar-title">${escapeHtml(item.title)}</span>
+        </a>`;
+    }).join('');
 }

@@ -1,4 +1,5 @@
 import sqlite3
+import json
 from datetime import datetime
 from typing import List, Dict, Optional
 import os
@@ -73,6 +74,30 @@ class Database:
         # 内容指纹索引
         cursor.execute('''
             CREATE INDEX IF NOT EXISTS idx_content_hash ON articles(content_hash)
+        ''')
+
+        # 热点数据表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS trending (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                platform TEXT NOT NULL,
+                rank_num INTEGER,
+                title TEXT NOT NULL,
+                hot_value TEXT,
+                url TEXT,
+                label TEXT,
+                extra TEXT,
+                batch_id TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_trending_platform
+            ON trending(platform, created_at DESC)
+        ''')
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_trending_batch
+            ON trending(batch_id)
         ''')
 
         conn.commit()
@@ -232,11 +257,96 @@ class Database:
 
     def delete_articles(self, article_ids: List[int]) -> int:
         """批量删除文章，返回删除数量"""
+        if not article_ids:
+            return 0
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        placeholders = ','.join('?' * len(article_ids))
+        placeholders = ','.join('?' for _ in article_ids)
         cursor.execute(f'DELETE FROM articles WHERE id IN ({placeholders})', article_ids)
         deleted_count = cursor.rowcount
         conn.commit()
         conn.close()
         return deleted_count
+
+    # ==================== 热点数据操作 ====================
+
+    def save_trending(self, platform: str, items: list, batch_id: str):
+        """保存热点数据"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        for item in items:
+            cursor.execute('''
+                INSERT INTO trending (platform, rank_num, title, hot_value, url, label, extra, batch_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                platform,
+                item.get('rank', 0),
+                item.get('title', ''),
+                str(item.get('hot_value', '')),
+                item.get('url', ''),
+                item.get('label', ''),
+                json.dumps({k: v for k, v in item.items()
+                            if k not in ('rank', 'title', 'hot_value', 'url', 'label')},
+                           ensure_ascii=False),
+                batch_id
+            ))
+        conn.commit()
+        conn.close()
+
+    def get_latest_trending(self, platform: str = None, limit: int = 50) -> List[Dict]:
+        """获取最新一批热点数据"""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        # 先找到最新的batch_id
+        if platform:
+            cursor.execute(
+                'SELECT batch_id FROM trending WHERE platform = ? ORDER BY created_at DESC LIMIT 1',
+                (platform,))
+        else:
+            cursor.execute('SELECT batch_id FROM trending ORDER BY created_at DESC LIMIT 1')
+
+        row = cursor.fetchone()
+        if not row:
+            conn.close()
+            return []
+
+        batch_id = row['batch_id']
+
+        if platform:
+            cursor.execute(
+                'SELECT * FROM trending WHERE batch_id = ? AND platform = ? ORDER BY rank_num',
+                (batch_id, platform))
+        else:
+            cursor.execute(
+                'SELECT * FROM trending WHERE batch_id = ? ORDER BY platform, rank_num',
+                (batch_id,))
+
+        results = [dict(r) for r in cursor.fetchall()]
+        conn.close()
+        return results
+
+    def get_trending_history(self, platform: str, hours: int = 24) -> List[Dict]:
+        """获取热点历史数据（按batch分组）"""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT DISTINCT batch_id, created_at FROM trending
+            WHERE platform = ? AND created_at >= datetime('now', ?)
+            ORDER BY created_at DESC
+        ''', (platform, f'-{hours} hours'))
+        batches = [dict(r) for r in cursor.fetchall()]
+        conn.close()
+        return batches
+
+    def cleanup_old_trending(self, keep_hours: int = 72):
+        """清理过期热点数据"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            "DELETE FROM trending WHERE created_at < datetime('now', ?)",
+            (f'-{keep_hours} hours',))
+        conn.commit()
+        conn.close()

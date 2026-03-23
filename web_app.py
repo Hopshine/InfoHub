@@ -14,6 +14,7 @@ from collector.sogou_enhanced import SogouWeixinCollector
 from config import Config
 from crawler.job_manager import JobManager
 from crawler.engine import CrawlEngine
+from collector.trending_scheduler import TrendingScheduler
 
 app = Flask(__name__)
 
@@ -24,6 +25,10 @@ print(f"使用数据库: {db_path}")
 
 # 初始化任务管理器
 job_manager = JobManager(db)
+
+# 初始化热点监控调度器
+trending_scheduler = TrendingScheduler(db, interval_minutes=30)
+trending_scheduler.start()
 
 @app.route('/')
 def index():
@@ -499,6 +504,61 @@ def crawl_stream(job_id):
             'Connection': 'keep-alive'
         }
     )
+
+
+# ==================== 热点监控API ====================
+
+@app.route('/trending')
+def trending_page():
+    """热点监控页面"""
+    return render_template('trending.html')
+
+
+@app.route('/api/trending')
+def get_trending():
+    """获取最新热点数据"""
+    try:
+        platform = request.args.get('platform')
+        items = db.get_latest_trending(platform)
+
+        # 按平台分组
+        grouped = {}
+        for item in items:
+            plat = item['platform']
+            if plat not in grouped:
+                grouped[plat] = []
+            grouped[plat].append(item)
+
+        return jsonify({
+            'success': True,
+            'data': {
+                'trending': grouped,
+                'last_update': trending_scheduler.last_update,
+                'scheduler': trending_scheduler.status
+            }
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/trending/refresh', methods=['POST'])
+def refresh_trending():
+    """手动刷新热点数据"""
+    try:
+        platform = request.json.get('platform') if request.json else None
+        result = trending_scheduler.refresh(platform)
+        return jsonify({'success': True, 'data': result})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/trending/status')
+def trending_status():
+    """获取热点监控状态"""
+    return jsonify({
+        'success': True,
+        'data': trending_scheduler.status
+    })
 
 
 if __name__ == '__main__':

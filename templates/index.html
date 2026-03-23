@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>InfoHub - 微信公众号信息收集与分析系统</title>
     <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="/static/css/trending.css">
     <script src="https://cdn.jsdelivr.net/npm/marked@11.1.1/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.8/dist/purify.min.js"></script>
 </head>
@@ -62,6 +63,9 @@
             <button class="btn btn-info" onclick="showCategories()">
                 📊 分类统计
             </button>
+            <a href="/trending" class="btn btn-trending" style="background:linear-gradient(135deg,#e53e3e,#805ad5);color:white;text-decoration:none;display:inline-flex;align-items:center;">
+                🔥 舆情监控
+            </a>
         </div>
 
         <!-- 批量操作栏 -->
@@ -82,8 +86,10 @@
             </div>
         </div>
 
-        <!-- 文章列表 -->
-        <div class="articles-section">
+        <!-- 热点侧边栏 + 文章列表 布局 -->
+        <div class="main-layout" style="display:flex;gap:20px;align-items:flex-start;">
+            <!-- 文章列表 -->
+            <div class="articles-section" style="flex:1;min-width:0;">
             <div class="articles-header">
                 <h2>文章列表</h2>
                 <div class="select-all-container">
@@ -109,7 +115,24 @@
                 <button class="btn btn-sm" onclick="nextPage()">下一页</button>
             </div>
         </div>
-    </div>
+
+            <!-- 热点侧边栏 -->
+            <div class="trending-sidebar" id="trending-sidebar" style="width:320px;flex-shrink:0;">
+                <div class="sidebar-header">
+                    <h3>🔥 实时热点</h3>
+                    <a href="/trending">查看全部 →</a>
+                </div>
+                <div class="sidebar-tabs" id="sidebar-tabs">
+                    <button class="sidebar-tab active" onclick="switchSidebarTab('weibo')">微博</button>
+                    <button class="sidebar-tab" onclick="switchSidebarTab('zhihu')">知乎</button>
+                    <button class="sidebar-tab" onclick="switchSidebarTab('baidu')">百度</button>
+                    <button class="sidebar-tab" onclick="switchSidebarTab('douyin')">抖音</button>
+                </div>
+                <div class="sidebar-list" id="sidebar-trending-list">
+                    <div class="loading" style="padding:20px;font-size:0.9em;">加载中...</div>
+                </div>
+            </div>
+        </div><!-- end main-layout -->
 
     <!-- 文章详情模态框 -->
     <div id="article-modal" class="modal">

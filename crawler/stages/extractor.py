@@ -93,7 +93,7 @@ class ExtractorStage:
                         # 验证时间戳是否合理（2020-2030年之间）
                         if 1577836800 < ts < 1893456000:
                             publish_time = datetime.datetime.fromtimestamp(ts).strftime('%Y-%m-%d %H:%M:%S')
-                    except:
+                    except (ValueError, IndexError, OSError, OverflowError):
                         pass
 
             article['publish_time'] = publish_time

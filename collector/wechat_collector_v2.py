@@ -12,6 +12,7 @@ from bs4 import BeautifulSoup
 import time
 import random
 import json
+import datetime
 from typing import List, Dict, Optional
 from utils.logger import setup_logger
 import re
@@ -95,12 +96,11 @@ class WeChatCollectorV2:
                 params = urllib.parse.parse_qs(parsed.query)
                 if 'timestamp' in params:
                     try:
-                        import datetime
                         ts = int(params['timestamp'][0])
                         # 验证时间戳是否合理（2020-2030年之间）
                         if 1577836800 < ts < 1893456000:
                             publish_time = datetime.datetime.fromtimestamp(ts).strftime('%Y-%m-%d %H:%M:%S')
-                    except:
+                    except (ValueError, IndexError, OSError, OverflowError):
                         pass
 
             # 提取文章内容
@@ -207,7 +207,6 @@ class WeChatCollectorV2:
                     match = re.search(r'createTime\s*=\s*["\'](\d+)["\']', script.string)
 
                 if match:
-                    import datetime
                     ts = int(match.group(1))
                     return datetime.datetime.fromtimestamp(ts).strftime('%Y-%m-%d %H:%M:%S')
 

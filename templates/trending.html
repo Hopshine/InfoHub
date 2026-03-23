@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>InfoHub - 舆情热点监控</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="/static/css/trending.css">
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <h1>🔥 舆情热点监控</h1>
+            <p class="subtitle">实时追踪全网热点动态</p>
+            <div class="header-nav">
+                <a href="/" class="nav-link">← 返回首页</a>
+            </div>
+        </header>
+
+        <!-- 状态栏 -->
+        <div class="trending-status-bar">
+            <div class="status-info">
+                <span id="last-update">上次更新：加载中...</span>
+                <span id="scheduler-status" class="status-badge">监控中</span>
+            </div>
+            <button class="btn btn-primary" onclick="refreshAll()">
+                🔄 立即刷新
+            </button>
+        </div>
+
+        <!-- 平台标签切换 -->
+        <div class="platform-tabs">
+            <button class="platform-tab active" data-platform="all"
+                    onclick="switchPlatform('all')">
+                📊 全部
+            </button>
+            <button class="platform-tab" data-platform="weibo"
+                    onclick="switchPlatform('weibo')">
+                🔴 微博热搜
+            </button>
+            <button class="platform-tab" data-platform="zhihu"
+                    onclick="switchPlatform('zhihu')">
+                🔵 知乎热榜
+            </button>
+            <button class="platform-tab" data-platform="baidu"
+                    onclick="switchPlatform('baidu')">
+                🟢 百度热搜
+            </button>
+            <button class="platform-tab" data-platform="douyin"
+                    onclick="switchPlatform('douyin')">
+                🟣 抖音热榜
+            </button>
+        </div>
+
+        <!-- 热榜内容区 -->
+        <div id="trending-content" class="trending-content">
+            <div class="loading">加载中...</div>
+        </div>
+    </div>
+
+    <script src="/static/js/trending.js"></script>
+</body>
+</html>
