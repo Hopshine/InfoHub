@@ -117,7 +117,13 @@ async function refreshAll() {
     btn.disabled = true;
 
     try {
-        const resp = await fetch('/api/trending/refresh', { method: 'POST' });
+        const resp = await fetch('/api/trending/refresh', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({})
+        });
         const data = await resp.json();
         if (data.success) {
             await loadTrending();

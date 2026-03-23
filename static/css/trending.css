@@ -1,5 +1,17 @@
 /* 热点监控页面样式 */
 
+/* 覆盖主容器宽度限制，使用更宽的布局 */
+body {
+    padding: 20px 40px;
+}
+
+.container {
+    max-width: 100%;
+    width: 100%;
+    margin: 0 auto;
+    padding: 0 20px;
+}
+
 .header-nav {
     margin-top: 15px;
 }
@@ -85,7 +97,7 @@
 /* 热榜内容 */
 .trending-content {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
+    grid-template-columns: repeat(4, 1fr);
     gap: 20px;
 }
 
@@ -119,7 +131,7 @@
 
 .trending-list {
     padding: 10px 0;
-    max-height: 600px;
+    max-height: calc(100vh - 350px);
     overflow-y: auto;
 }
 
@@ -291,6 +303,18 @@
 }
 
 /* 响应式 */
+@media (max-width: 1600px) {
+    .trending-content {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+@media (max-width: 1024px) {
+    .trending-content {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
 @media (max-width: 768px) {
     .trending-content {
         grid-template-columns: 1fr;
