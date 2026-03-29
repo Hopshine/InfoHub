@@ -850,3 +850,332 @@ function renderSidebarTrending() {
         </a>`;
     }).join('');
 }
+
+// ==================== 生成文章功能 ====================
+
+function showGenerateModal() {
+    document.getElementById('generate-modal').style.display = 'block';
+}
+
+function closeGenerateModal() {
+    document.getElementById('generate-modal').style.display = 'none';
+    document.getElementById('generate-result').innerHTML = '';
+}
+
+async function generateArticles() {
+    const count = parseInt(document.getElementById('generate-count').value) || 5;
+    const style = document.getElementById('generate-style').value;
+    const resultDiv = document.getElementById('generate-result');
+
+    resultDiv.innerHTML = '<div class="loading">生成中...</div>';
+
+    try {
+        const resp = await fetch('/api/generate', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({count, style})
+        });
+        const data = await resp.json();
+
+        if (data.success) {
+            resultDiv.innerHTML = `<div class="success">✓ 成功生成 ${data.data.generated} 篇文章</div>`;
+            setTimeout(() => closeGenerateModal(), 2000);
+        } else {
+            resultDiv.innerHTML = `<div class="error">✗ ${data.error}</div>`;
+        }
+    } catch (e) {
+        resultDiv.innerHTML = `<div class="error">✗ ${e.message}</div>`;
+    }
+}
+
+// ==================== 发布管理功能 ====================
+
+function showPublishModal() {
+    document.getElementById('publish-modal').style.display = 'block';
+    loadDrafts();
+}
+
+function closePublishModal() {
+    document.getElementById('publish-modal').style.display = 'none';
+}
+
+function switchPublishTab(tab) {
+    document.querySelectorAll('.publish-tabs .tab-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.textContent.includes(tab === 'drafts' ? '草稿' : '发布'));
+    });
+    document.querySelectorAll('.publish-tab-content').forEach(content => {
+        content.classList.remove('active');
+    });
+    document.getElementById(`publish-${tab}-tab`).classList.add('active');
+
+    if (tab === 'drafts') loadDrafts();
+    else loadPublished();
+}
+
+async function loadDrafts() {
+    const listDiv = document.getElementById('drafts-list');
+    listDiv.innerHTML = '<div class="loading">加载中...</div>';
+
+    try {
+        const resp = await fetch('/api/drafts');
+        const data = await resp.json();
+
+        if (data.success && data.data.length > 0) {
+            listDiv.innerHTML = data.data.map(article => `
+                <div class="draft-item" style="border:1px solid #e2e8f0;padding:15px;margin:10px 0;border-radius:8px;">
+                    <h4>${escapeHtml(article.title)}</h4>
+                    <p style="color:#718096;font-size:0.9em;">${escapeHtml(article.summary || '').substring(0, 100)}</p>
+                    <div style="margin-top:10px;">
+                        <button class="btn btn-sm btn-success" onclick="publishArticle(${article.id}, 'draft')">发布到草稿箱</button>
+                        <button class="btn btn-sm btn-primary" onclick="publishArticle(${article.id}, 'publish')">直接发布</button>
+                    </div>
+                </div>
+            `).join('');
+        } else {
+            listDiv.innerHTML = '<div style="padding:20px;text-align:center;color:#a0aec0;">暂无草稿</div>';
+        }
+    } catch (e) {
+        listDiv.innerHTML = `<div class="error">加载失败: ${e.message}</div>`;
+    }
+}
+
+async function loadPublished() {
+    const listDiv = document.getElementById('published-list');
+    listDiv.innerHTML = '<div class="loading">加载中...</div>';
+
+    try {
+        const resp = await fetch('/api/published');
+        const data = await resp.json();
+
+        if (data.success && data.data.length > 0) {
+            listDiv.innerHTML = data.data.map(record => `
+                <div class="publish-item" style="border:1px solid #e2e8f0;padding:15px;margin:10px 0;border-radius:8px;">
+                    <div><strong>文章ID:</strong> ${record.article_id}</div>
+                    <div><strong>状态:</strong> <span class="badge badge-${record.status}">${record.status}</span></div>
+                    <div><strong>发布时间:</strong> ${record.published_at || record.created_at}</div>
+                    <div style="color:#718096;font-size:0.9em;margin-top:5px;">${escapeHtml(record.result)}</div>
+                </div>
+            `).join('');
+        } else {
+            listDiv.innerHTML = '<div style="padding:20px;text-align:center;color:#a0aec0;">暂无发布记录</div>';
+        }
+    } catch (e) {
+        listDiv.innerHTML = `<div class="error">加载失败: ${e.message}</div>`;
+    }
+}
+
+async function publishArticle(articleId, publishType) {
+    if (!confirm(`确定要${publishType === 'draft' ? '发布到草稿箱' : '直接发布'}吗？`)) return;
+
+    try {
+        const resp = await fetch('/api/publish', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({article_ids: [articleId], publish_type: publishType})
+        });
+        const data = await resp.json();
+
+        if (data.success) {
+            alert('发布成功！');
+            loadDrafts();
+        } else {
+            alert('发布失败: ' + data.error);
+        }
+    } catch (e) {
+        alert('发布失败: ' + e.message);
+    }
+}
+
+// ==================== 公众号管理 ====================
+
+function showAccountModal() {
+    document.getElementById('account-modal').style.display = 'block';
+    loadAccounts();
+}
+
+function closeAccountModal() {
+    document.getElementById('account-modal').style.display = 'none';
+    hideAccountForm();
+}
+
+function showAccountForm() {
+    document.getElementById('account-form').style.display = 'block';
+    document.getElementById('account-id').value = '';
+    document.getElementById('account-name').value = '';
+    document.getElementById('account-appid').value = '';
+    document.getElementById('account-secret').value = '';
+    document.getElementById('account-keywords').value = '';
+    document.getElementById('account-style').value = 'news';
+    document.getElementById('account-prompt').value = '';
+}
+
+function hideAccountForm() {
+    document.getElementById('account-form').style.display = 'none';
+}
+
+async function loadAccounts() {
+    try {
+        const resp = await fetch('/api/accounts');
+        const data = await resp.json();
+
+        if (data.success) {
+            const listDiv = document.getElementById('accounts-list');
+            if (data.data.length === 0) {
+                listDiv.innerHTML = '<div style="padding:20px;text-align:center;color:#a0aec0;">暂无公众号配置</div>';
+                return;
+            }
+
+            listDiv.innerHTML = data.data.map(acc => `
+                <div style="border:1px solid #e2e8f0;padding:15px;margin:10px 0;border-radius:8px;">
+                    <div style="display:flex;justify-content:space-between;align-items:start;">
+                        <div style="flex:1;">
+                            <div style="font-weight:bold;font-size:1.1em;margin-bottom:8px;">${escapeHtml(acc.name)}</div>
+                            <div style="color:#718096;font-size:0.9em;">AppID: ${escapeHtml(acc.app_id)}</div>
+                            <div style="color:#718096;font-size:0.9em;">风格: ${acc.style_preference || 'news'}</div>
+                            <div style="color:#718096;font-size:0.9em;">关键词: ${escapeHtml(acc.topic_keywords || '无')}</div>
+                        </div>
+                        <div>
+                            <button class="btn btn-sm" onclick="editAccount(${acc.id})">编辑</button>
+                            <button class="btn btn-sm btn-danger" onclick="deleteAccount(${acc.id})">删除</button>
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+        }
+    } catch (e) {
+        console.error('加载公众号失败:', e);
+    }
+}
+
+async function saveAccount() {
+    const id = document.getElementById('account-id').value;
+    const data = {
+        name: document.getElementById('account-name').value,
+        app_id: document.getElementById('account-appid').value,
+        app_secret: document.getElementById('account-secret').value,
+        topic_keywords: document.getElementById('account-keywords').value,
+        style_preference: document.getElementById('account-style').value,
+        custom_prompt: document.getElementById('account-prompt').value
+    };
+
+    if (!data.name || !data.app_id || !data.app_secret) {
+        alert('请填写必填项');
+        return;
+    }
+
+    try {
+        const url = id ? `/api/accounts/${id}` : '/api/accounts';
+        const method = id ? 'PUT' : 'POST';
+
+        const resp = await fetch(url, {
+            method: method,
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(data)
+        });
+        const result = await resp.json();
+
+        if (result.success) {
+            alert('保存成功');
+            hideAccountForm();
+            loadAccounts();
+        } else {
+            alert('保存失败: ' + result.error);
+        }
+    } catch (e) {
+        alert('保存失败: ' + e.message);
+    }
+}
+
+async function editAccount(accountId) {
+    try {
+        const resp = await fetch('/api/accounts');
+        const data = await resp.json();
+        const account = data.data.find(a => a.id === accountId);
+
+        if (account) {
+            document.getElementById('account-id').value = account.id;
+            document.getElementById('account-name').value = account.name;
+            document.getElementById('account-appid').value = account.app_id;
+            document.getElementById('account-secret').value = account.app_secret;
+            document.getElementById('account-keywords').value = account.topic_keywords || '';
+            document.getElementById('account-style').value = account.style_preference || 'news';
+            document.getElementById('account-prompt').value = account.custom_prompt || '';
+            document.getElementById('account-form').style.display = 'block';
+        }
+    } catch (e) {
+        alert('加载失败: ' + e.message);
+    }
+}
+
+async function deleteAccount(accountId) {
+    if (!confirm('确定删除此公众号配置？')) return;
+
+    try {
+        const resp = await fetch(`/api/accounts/${accountId}`, {method: 'DELETE'});
+        const data = await resp.json();
+
+        if (data.success) {
+            alert('删除成功');
+            loadAccounts();
+        } else {
+            alert('删除失败: ' + data.error);
+        }
+    } catch (e) {
+        alert('删除失败: ' + e.message);
+    }
+}
+
+// ==================== 智能工作流 ====================
+
+async function startWorkflow(hotnewsId, parallel = true) {
+    try {
+        const resp = await fetch('/api/workflow/start', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({hotnews_id: hotnewsId, parallel: parallel})
+        });
+        const data = await resp.json();
+
+        if (data.success) {
+            alert(`工作流启动成功，处理了 ${data.data.length} 个公众号`);
+            loadPendingReviews();
+        } else {
+            alert('启动失败: ' + data.error);
+        }
+    } catch (e) {
+        alert('启动失败: ' + e.message);
+    }
+}
+
+async function loadPendingReviews() {
+    try {
+        const resp = await fetch('/api/workflow/pending');
+        const data = await resp.json();
+
+        if (data.success && data.data.length > 0) {
+            console.log('待审核任务:', data.data);
+        }
+    } catch (e) {
+        console.error('加载待审核任务失败:', e);
+    }
+}
+
+async function submitReview(threadId, decision) {
+    try {
+        const resp = await fetch('/api/workflow/review', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({thread_id: threadId, decision: decision})
+        });
+        const data = await resp.json();
+
+        if (data.success) {
+            alert('审核提交成功');
+            loadPendingReviews();
+        } else {
+            alert('提交失败: ' + data.error);
+        }
+    } catch (e) {
+        alert('提交失败: ' + e.message);
+    }
+}

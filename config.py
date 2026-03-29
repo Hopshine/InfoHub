@@ -31,6 +31,25 @@ class Config:
     # 搜狗微信搜索配置
     SOGOU_WEIXIN_SEARCH_URL = 'https://weixin.sogou.com/weixin'
 
+    # 微信公众号API配置
+    WECHAT_APP_ID = os.getenv('WECHAT_APP_ID', '')
+    WECHAT_APP_SECRET = os.getenv('WECHAT_APP_SECRET', '')
+
+    # 热点新闻源配置
+    HOTNEWS_SOURCES = os.getenv('HOTNEWS_SOURCES', 'toutiao,baidu,weibo').split(',')
+    HOTNEWS_REFRESH_INTERVAL = int(os.getenv('HOTNEWS_REFRESH_INTERVAL', 30))  # 分钟
+
+    # 文章生成配置
+    ARTICLE_MODEL = os.getenv('ARTICLE_MODEL', os.getenv('ANALYSIS_MODEL', 'claude-sonnet-4-6'))
+    ARTICLE_STYLE = os.getenv('ARTICLE_STYLE', 'news')  # news, comment, deep
+    ARTICLE_MAX_TOKENS = int(os.getenv('ARTICLE_MAX_TOKENS', 4000))
+
+    # 调度配置
+    SCHEDULER_HOTNEWS_CRON = os.getenv('SCHEDULER_HOTNEWS_CRON', '*/30 * * * *')
+    SCHEDULER_GENERATE_CRON = os.getenv('SCHEDULER_GENERATE_CRON', '0 8,12,18 * * *')
+    SCHEDULER_PUBLISH_CRON = os.getenv('SCHEDULER_PUBLISH_CRON', '0 9,13,19 * * *')
+    SCHEDULER_AUTO_PUBLISH = os.getenv('SCHEDULER_AUTO_PUBLISH', 'false').lower() == 'true'
+
     @classmethod
     def validate(cls):
         """验证必要的配置项"""
@@ -39,3 +58,9 @@ class Config:
         if cls.LLM_PROVIDER not in ['anthropic', 'openai']:
             raise ValueError(f"LLM_PROVIDER 必须是 'anthropic' 或 'openai'，当前值: {cls.LLM_PROVIDER}")
         return True
+
+    @classmethod
+    def validate_wechat(cls):
+        """验证微信公众号配置"""
+        if not cls.WECHAT_APP_ID or not cls.WECHAT_APP_SECRET:
+            raise ValueError("WECHAT_APP_ID 和 WECHAT_APP_SECRET 未设置")

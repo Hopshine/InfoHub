@@ -37,7 +37,14 @@
       "Bash(curl:*)",
       "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(''''success:'''', d[''''success'''']\\); t=d.get\\(''''data'''',{}\\).get\\(''''trending'''',{}\\); [print\\(f''''{k}: {len\\(v\\)} items''''\\) for k,v in t.items\\(\\)]\")",
       "Bash(python -c \":*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(lsof -i :5000)",
+      "Bash(kill 56175)",
+      "Bash(sudo lsof -i :5000)",
+      "Bash(kill -9 29840)",
+      "Bash(test -f /Users/edwardshine/code/InfoHub/.env && echo \"exists\" || echo \"not exists\")",
+      "Bash(find . -type d -name \"__pycache__\" -exec rm -rf {} + 2>/dev/null || true)",
+      "Bash(find . -type f \\\\\\( -name \"*.pyc\" -o -name \"*.pyo\" -o -name \".DS_Store\" \\\\\\) -delete)"
     ]
   }
 }

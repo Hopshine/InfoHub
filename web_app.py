@@ -15,6 +15,9 @@ from config import Config
 from crawler.job_manager import JobManager
 from crawler.engine import CrawlEngine
 from collector.trending_scheduler import TrendingScheduler
+from generator.article_generator import ArticleGenerator
+from publisher.wechat_publisher import WeChatPublisher
+from generator.workflow_manager import WorkflowManager
 
 app = Flask(__name__)
 
@@ -29,6 +32,11 @@ job_manager = JobManager(db)
 # 初始化热点监控调度器
 trending_scheduler = TrendingScheduler(db, interval_minutes=30)
 trending_scheduler.start()
+
+# 初始化文章生成器和发布器
+article_generator = ArticleGenerator()
+wechat_publisher = WeChatPublisher()
+workflow_manager = WorkflowManager(db, db_path)
 
 @app.route('/')
 def index():
@@ -561,11 +569,194 @@ def trending_status():
     })
 
 
+# ==================== 文章生成API ====================
+
+@app.route('/api/generate', methods=['POST'])
+def generate_articles():
+    """基于热点生成文章"""
+    try:
+        data = request.json or {}
+        count = data.get('count', 5)
+        style = data.get('style', Config.ARTICLE_STYLE)
+        hotnews_ids = data.get('hotnews_ids', [])
+
+        # 获取待生成的热点
+        if hotnews_ids:
+            news_list = [db.get_hotnews_by_id(nid) for nid in hotnews_ids]
+            news_list = [n for n in news_list if n]
+        else:
+            news_list = db.get_latest_trending(limit=count)
+
+        results = []
+        for news in news_list[:count]:
+            article_id = article_generator.generate_and_save(db, news, style)
+            if article_id:
+                results.append({'hotnews_id': news.get('id'), 'article_id': article_id})
+
+        return jsonify({
+            'success': True,
+            'data': {'generated': len(results), 'articles': results}
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/publish', methods=['POST'])
+def publish_articles():
+    """发布文章到微信公众号"""
+    try:
+        data = request.json or {}
+        article_ids = data.get('article_ids', [])
+        publish_type = data.get('publish_type', 'draft')
+
+        if not article_ids:
+            return jsonify({'success': False, 'error': '请选择要发布的文章'})
+
+        results = []
+        for article_id in article_ids:
+            article = db.get_generated_article_by_id(article_id)
+            if not article:
+                continue
+            result = wechat_publisher.publish_article(article, db, publish_type)
+            results.append(result)
+
+        return jsonify({
+            'success': True,
+            'data': {'published': len(results), 'results': results}
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/drafts')
+def get_drafts():
+    """获取草稿文章列表"""
+    try:
+        articles = db.get_generated_articles(status='draft')
+        return jsonify({'success': True, 'data': articles})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/published')
+def get_published():
+    """获取发布记录"""
+    try:
+        records = db.get_publish_records()
+        return jsonify({'success': True, 'data': records})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+# ==================== 公众号管理API ====================
+
+@app.route('/api/accounts', methods=['POST'])
+def create_account():
+    """创建公众号配置"""
+    try:
+        data = request.json or {}
+        account_id = db.insert_wechat_account(data)
+        if account_id:
+            return jsonify({'success': True, 'data': {'id': account_id}})
+        return jsonify({'success': False, 'error': '创建失败，AppID可能已存在'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/accounts')
+def get_accounts():
+    """获取公众号列表"""
+    try:
+        active_only = request.args.get('active_only', 'false').lower() == 'true'
+        accounts = db.get_wechat_accounts(active_only=active_only)
+        return jsonify({'success': True, 'data': accounts})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/accounts/<int:account_id>', methods=['PUT'])
+def update_account(account_id):
+    """更新公众号配置"""
+    try:
+        data = request.json or {}
+        db.update_wechat_account(account_id, data)
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/accounts/<int:account_id>', methods=['DELETE'])
+def delete_account(account_id):
+    """删除公众号配置"""
+    try:
+        if db.delete_wechat_account(account_id):
+            return jsonify({'success': True})
+        return jsonify({'success': False, 'error': '公众号不存在'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+# ==================== 智能工作流API ====================
+
+@app.route('/api/workflow/start', methods=['POST'])
+def start_workflow():
+    """启动智能生成工作流"""
+    try:
+        data = request.json or {}
+        hotnews_id = data.get('hotnews_id')
+        parallel = data.get('parallel', True)
+
+        if not hotnews_id:
+            return jsonify({'success': False, 'error': '请指定热点新闻ID'})
+
+        results = workflow_manager.run(hotnews_id, parallel=parallel)
+        return jsonify({'success': True, 'data': results})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/workflow/pending')
+def get_pending_workflows():
+    """获取待审核的工作流"""
+    try:
+        pending = workflow_manager.get_pending_reviews()
+        return jsonify({'success': True, 'data': pending})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/workflow/review', methods=['POST'])
+def submit_review():
+    """提交审核决定"""
+    try:
+        data = request.json or {}
+        thread_id = data.get('thread_id')
+        decision = data.get('decision')
+
+        if not thread_id or not decision:
+            return jsonify({'success': False, 'error': '缺少参数'})
+
+        result = workflow_manager.resume(thread_id, decision)
+        return jsonify({'success': True, 'data': result})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/workflow/visualization')
+def get_workflow_visualization():
+    """获取工作流可视化"""
+    try:
+        mermaid = workflow_manager.get_visualization()
+        return jsonify({'success': True, 'data': {'mermaid': mermaid}})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
 if __name__ == '__main__':
     print("=" * 60)
     print("InfoHub Web 管理界面")
     print("=" * 60)
-    print("访问地址: http://localhost:5000")
+    print("访问地址: http://localhost:9000")
     print("按 Ctrl+C 停止服务器")
     print("=" * 60)
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.run(debug=True, host='0.0.0.0', port=9000)

@@ -66,6 +66,15 @@
             <a href="/trending" class="btn btn-trending" style="background:linear-gradient(135deg,#e53e3e,#805ad5);color:white;text-decoration:none;display:inline-flex;align-items:center;">
                 🔥 舆情监控
             </a>
+            <button class="btn" style="background:linear-gradient(135deg,#38b2ac,#4299e1);color:white;" onclick="showGenerateModal()">
+                ✍️ 生成文章
+            </button>
+            <button class="btn" style="background:linear-gradient(135deg,#48bb78,#38a169);color:white;" onclick="showPublishModal()">
+                📤 发布管理
+            </button>
+            <button class="btn" style="background:linear-gradient(135deg,#9f7aea,#805ad5);color:white;" onclick="showAccountModal()">
+                🏢 公众号管理
+            </button>
         </div>
 
         <!-- 批量操作栏 -->
@@ -210,6 +219,69 @@
             </div>
 
             <div id="collect-result" class="collect-result"></div>
+        </div>
+    </div>
+
+    <!-- 生成文章模态框 -->
+    <div id="generate-modal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeGenerateModal()">&times;</span>
+            <h2>✍️ 生成文章</h2>
+            <div style="margin:20px 0;">
+                <label>生成数量：<input type="number" id="generate-count" value="5" min="1" max="20" style="width:80px;"></label>
+                <label style="margin-left:20px;">风格：
+                    <select id="generate-style">
+                        <option value="news">资讯速报</option>
+                        <option value="comment">热点评论</option>
+                        <option value="deep">深度解读</option>
+                    </select>
+                </label>
+            </div>
+            <button class="btn btn-success" onclick="generateArticles()">开始生成</button>
+            <div id="generate-result" style="margin-top:20px;"></div>
+        </div>
+    </div>
+
+    <!-- 发布管理模态框 -->
+    <div id="publish-modal" class="modal">
+        <div class="modal-content" style="max-width:800px;">
+            <span class="close" onclick="closePublishModal()">&times;</span>
+            <h2>📤 发布管理</h2>
+            <div class="publish-tabs">
+                <button class="tab-btn active" onclick="switchPublishTab('drafts')">草稿箱</button>
+                <button class="tab-btn" onclick="switchPublishTab('published')">发布记录</button>
+            </div>
+            <div id="publish-drafts-tab" class="publish-tab-content active">
+                <div id="drafts-list"></div>
+            </div>
+            <div id="publish-published-tab" class="publish-tab-content">
+                <div id="published-list"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 公众号管理模态框 -->
+    <div id="account-modal" class="modal">
+        <div class="modal-content" style="max-width:900px;">
+            <span class="close" onclick="closeAccountModal()">&times;</span>
+            <h2>🏢 公众号管理</h2>
+            <button class="btn btn-primary" onclick="showAccountForm()" style="margin-bottom:15px;">➕ 添加公众号</button>
+            <div id="account-form" style="display:none;background:#f5f5f5;padding:15px;border-radius:8px;margin-bottom:15px;">
+                <input type="hidden" id="account-id">
+                <input type="text" id="account-name" placeholder="公众号名称" style="width:100%;margin-bottom:10px;">
+                <input type="text" id="account-appid" placeholder="AppID" style="width:100%;margin-bottom:10px;">
+                <input type="text" id="account-secret" placeholder="AppSecret" style="width:100%;margin-bottom:10px;">
+                <input type="text" id="account-keywords" placeholder="选题关键词（逗号分隔）" style="width:100%;margin-bottom:10px;">
+                <select id="account-style" style="width:100%;margin-bottom:10px;">
+                    <option value="news">资讯速报</option>
+                    <option value="comment">热点评论</option>
+                    <option value="deep">深度解读</option>
+                </select>
+                <textarea id="account-prompt" placeholder="自定义prompt（可选）" style="width:100%;height:80px;margin-bottom:10px;"></textarea>
+                <button class="btn btn-success" onclick="saveAccount()">保存</button>
+                <button class="btn" onclick="hideAccountForm()">取消</button>
+            </div>
+            <div id="accounts-list"></div>
         </div>
     </div>
 

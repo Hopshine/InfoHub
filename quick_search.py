@@ -115,7 +115,7 @@ def quick_search_test():
 
     if success_count > 0:
         print("\n可以通过以下方式查看:")
-        print("1. Web界面: http://localhost:5000")
+        print("1. Web界面: http://localhost:9000")
         print("2. 命令行: python view_db.py")
 
 if __name__ == '__main__':
