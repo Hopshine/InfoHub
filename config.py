@@ -17,7 +17,7 @@ class Config:
     DATABASE_PATH = os.getenv('DATABASE_PATH', 'data/articles.db')
 
     # 采集配置
-    SEARCH_KEYWORDS = os.getenv('SEARCH_KEYWORDS', '大模型,Claude,GPT,AI').split(',')
+    SEARCH_KEYWORDS = os.getenv('SEARCH_KEYWORDS', '热点,头条,突发,社会,财经').split(',')
     MAX_ARTICLES_PER_SEARCH = int(os.getenv('MAX_ARTICLES_PER_SEARCH', 20))
 
     # 爬虫配置

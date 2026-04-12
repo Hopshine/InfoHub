@@ -15,9 +15,13 @@ from config import Config
 from crawler.job_manager import JobManager
 from crawler.engine import CrawlEngine
 from collector.trending_scheduler import TrendingScheduler
+from collector.hotnews_article_collector import HotNewsArticleCollector
 from generator.article_generator import ArticleGenerator
 from publisher.wechat_publisher import WeChatPublisher
 from generator.workflow_manager import WorkflowManager
+from utils.logger import setup_logger
+
+logger = setup_logger('web_app')
 
 app = Flask(__name__)
 
@@ -36,6 +40,7 @@ trending_scheduler.start()
 # 初始化文章生成器和发布器
 article_generator = ArticleGenerator()
 wechat_publisher = WeChatPublisher()
+hotnews_article_collector = HotNewsArticleCollector()
 workflow_manager = WorkflowManager(db, db_path)
 
 @app.route('/')
@@ -567,6 +572,51 @@ def trending_status():
         'success': True,
         'data': trending_scheduler.status
     })
+
+
+@app.route('/api/trending/collect', methods=['POST'])
+def collect_trending_articles():
+    """从热点新闻链接爬取原文到文章库"""
+    try:
+        data = request.json or {}
+        trending_ids = data.get('ids', [])
+        platform = data.get('platform')
+        limit = data.get('limit', 10)
+        analyze = data.get('analyze', True)
+
+        # 获取热点列表
+        if trending_ids:
+            # 指定ID采集
+            hotnews_list = []
+            for tid in trending_ids:
+                items = db.get_latest_trending()
+                item = next((i for i in items if i['id'] == tid), None)
+                if item:
+                    hotnews_list.append(item)
+        else:
+            # 按平台获取最新热点
+            hotnews_list = db.get_latest_trending(platform=platform, limit=limit)
+
+        if not hotnews_list:
+            return jsonify({'success': False, 'error': '没有找到可采集的热点新闻'})
+
+        # 过滤掉没有URL的热点
+        hotnews_list = [h for h in hotnews_list if h.get('url', '').strip()]
+        if not hotnews_list:
+            return jsonify({'success': False, 'error': '热点新闻中没有有效的URL'})
+
+        # 转换trending字段名到hotnews格式
+        for item in hotnews_list:
+            item.setdefault('source', item.get('platform', ''))
+
+        result = hotnews_article_collector.collect_and_save(
+            db, hotnews_list, analyze=analyze)
+
+        return jsonify({'success': True, 'data': result})
+
+    except Exception as e:
+        logger.error(f"热点文章采集失败: {e}")
+        return jsonify({'success': False, 'error': str(e)})
 
 
 # ==================== 文章生成API ====================

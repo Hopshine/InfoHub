@@ -74,6 +74,41 @@ async function loadArticles(page = 1) {
     }
 }
 
+// 来源平台映射
+function getSourceInfo(article) {
+    const source = (article.source || '').toLowerCase();
+    const account = (article.account_name || '').toLowerCase();
+    if (source === 'wechat' || account.includes('微信')) return { label: '微信', cls: 'source-wechat' };
+    if (source === 'weibo' || account === '微博') return { label: '微博', cls: 'source-weibo' };
+    if (source === 'zhihu' || account === '知乎') return { label: '知乎', cls: 'source-zhihu' };
+    if (source === 'baidu' || account.includes('百度')) return { label: '百度', cls: 'source-baidu' };
+    if (source === 'douyin' || account.includes('抖音')) return { label: '抖音', cls: 'source-douyin' };
+    if (source && source !== 'manual') return { label: source, cls: 'source-default' };
+    return null;
+}
+
+// 格式化时间
+function formatTime(timeStr) {
+    if (!timeStr) return '';
+    try {
+        const d = new Date(timeStr);
+        if (isNaN(d.getTime())) return timeStr;
+        const now = new Date();
+        const diff = now - d;
+        if (diff < 3600000) return Math.max(1, Math.floor(diff / 60000)) + '分钟前';
+        if (diff < 86400000) return Math.floor(diff / 3600000) + '小时前';
+        if (diff < 604800000) return Math.floor(diff / 86400000) + '天前';
+        return (d.getMonth() + 1) + '月' + d.getDate() + '日';
+    } catch (e) { return timeStr; }
+}
+
+// 截取内容预览
+function getPreview(content, maxLen) {
+    if (!content) return '';
+    const text = content.replace(/\n+/g, ' ').replace(/\s+/g, ' ').trim();
+    return text.length > maxLen ? text.substring(0, maxLen) + '...' : text;
+}
+
 // 显示文章列表
 function displayArticles(articles) {
     const listElement = document.getElementById('articles-list');
@@ -83,7 +118,12 @@ function displayArticles(articles) {
         return;
     }
 
-    listElement.innerHTML = articles.map(article => `
+    listElement.innerHTML = articles.map(article => {
+        const sourceInfo = getSourceInfo(article);
+        const preview = !article.summary ? getPreview(article.content, 120) : '';
+        const time = formatTime(article.created_at || article.publish_time);
+
+        return `
         <div class="article-item">
             <div class="article-checkbox">
                 <input type="checkbox"
@@ -95,35 +135,38 @@ function displayArticles(articles) {
             <div class="article-content" onclick="showArticleDetail(${article.id})">
                 <div class="article-header">
                     <div class="article-title">${escapeHtml(article.title)}</div>
-                    <span class="article-status ${article.analysis ? 'status-analyzed' : 'status-pending'}">
-                        ${article.analysis ? '已分析' : '待分析'}
-                    </span>
+                    <div class="article-badges">
+                        ${sourceInfo ? `<span class="source-badge ${sourceInfo.cls}">${sourceInfo.label}</span>` : ''}
+                        <span class="article-status ${article.analysis ? 'status-analyzed' : 'status-pending'}">
+                            ${article.analysis ? '已分析' : '待分析'}
+                        </span>
+                    </div>
                 </div>
                 <div class="article-meta">
-                    <span>📱 ${escapeHtml(article.account_name || '未知')}</span>
-                    <span>📅 ${article.publish_time || '未知'}</span>
-                    ${article.category ? `<span>🏷️ ${escapeHtml(article.category)}</span>` : ''}
+                    ${article.account_name ? `<span>${escapeHtml(article.account_name)}</span>` : ''}
+                    ${time ? `<span>${time}</span>` : ''}
+                    ${article.category ? `<span class="tag category">${escapeHtml(article.category)}</span>` : ''}
                 </div>
-                ${article.summary ? `
-                    <div class="article-summary">${escapeHtml(article.summary)}</div>
-                ` : ''}
+                ${preview ? `<div class="article-preview">${escapeHtml(preview)}</div>` : ''}
+                ${article.summary ? `<div class="article-summary">${escapeHtml(article.summary)}</div>` : ''}
                 ${article.keywords ? `
                     <div class="article-tags">
-                        ${article.keywords.split(',').map(k =>
+                        ${article.keywords.split(',').slice(0, 5).map(k =>
                             `<span class="tag">${escapeHtml(k.trim())}</span>`
                         ).join('')}
                     </div>
                 ` : ''}
             </div>
-        </div>
-    `).join('');
+        </div>`;
+    }).join('');
 
     updateBulkActionsBar();
 }
 
 // 更新分页信息
 function updatePagination(data) {
-    document.getElementById('page-info').textContent = `第 ${data.page} 页`;
+    const totalPages = Math.ceil(data.total / data.limit) || 1;
+    document.getElementById('page-info').textContent = `第 ${data.page}/${totalPages} 页 (共${data.total}篇)`;
 }
 
 // 过滤文章
@@ -152,52 +195,64 @@ async function showArticleDetail(articleId) {
 
         if (result.success) {
             const article = result.data;
+            const sourceInfo = getSourceInfo(article);
+            const time = formatTime(article.created_at || article.publish_time);
+
             const detailHtml = `
-                <h2>${escapeHtml(article.title)}</h2>
+                <div class="detail-title">${escapeHtml(article.title)}</div>
 
                 <div class="detail-meta">
-                    <p><strong>公众号:</strong> ${escapeHtml(article.account_name || '未知')}</p>
-                    <p><strong>作者:</strong> ${escapeHtml(article.author || '未知')}</p>
-                    <p><strong>发布时间:</strong> ${article.publish_time || '未知'}</p>
-                    ${article.category ? `<p><strong>分类:</strong> ${escapeHtml(article.category)}</p>` : ''}
-                    ${article.keywords ? `<p><strong>关键词:</strong> ${escapeHtml(article.keywords)}</p>` : ''}
+                    ${article.account_name ? `<span class="detail-meta-item"><strong>来源</strong> ${escapeHtml(article.account_name)}</span>` : ''}
+                    ${sourceInfo ? `<span class="detail-meta-item"><span class="source-badge ${sourceInfo.cls}">${sourceInfo.label}</span></span>` : ''}
+                    ${article.author ? `<span class="detail-meta-item"><strong>作者</strong> ${escapeHtml(article.author)}</span>` : ''}
+                    ${time ? `<span class="detail-meta-item"><strong>时间</strong> ${time}</span>` : ''}
+                    ${article.category ? `<span class="detail-meta-item"><span class="tag category">${escapeHtml(article.category)}</span></span>` : ''}
                 </div>
+
+                ${article.keywords ? `
+                    <div class="detail-keywords">
+                        ${article.keywords.split(',').map(k =>
+                            `<span class="tag">${escapeHtml(k.trim())}</span>`
+                        ).join('')}
+                    </div>
+                ` : ''}
 
                 ${article.summary ? `
                     <div class="detail-section">
-                        <h3>📝 摘要</h3>
-                        <p>${escapeHtml(article.summary)}</p>
+                        <div class="detail-section-header">摘要</div>
+                        <div class="detail-summary-box">${escapeHtml(article.summary)}</div>
                     </div>
                 ` : ''}
 
                 ${article.analysis ? `
                     <div class="detail-section">
-                        <h3>🔍 深度分析</h3>
+                        <div class="detail-section-header">深度分析</div>
                         <div class="markdown-body">${renderMarkdown(article.analysis)}</div>
                     </div>
                 ` : ''}
 
                 ${article.content ? `
                     <div class="detail-section">
-                        <h3>📄 文章内容</h3>
-                        <p style="white-space: pre-wrap;">${escapeHtml(article.content.substring(0, 1000))}${article.content.length > 1000 ? '...' : ''}</p>
+                        <div class="detail-section-header">文章内容</div>
+                        <div class="detail-content-body">${escapeHtml(article.content.substring(0, 2000))}${article.content.length > 2000 ? '\n\n...(内容已截断)' : ''}</div>
                     </div>
                 ` : ''}
 
                 <div class="detail-actions">
                     ${!article.analysis ? `
                         <button class="btn btn-success" onclick="analyzeArticle(${article.id})">
-                            🤖 立即分析
+                            立即分析
                         </button>
                     ` : ''}
                     <button class="btn btn-danger" onclick="deleteArticle(${article.id})">
-                        🗑️ 删除文章
+                        删除文章
                     </button>
+                    ${article.url ? `
+                        <a href="${article.url}" target="_blank" class="btn btn-info" style="text-decoration:none;">
+                            查看原文
+                        </a>
+                    ` : ''}
                 </div>
-
-                <p style="margin-top: 20px; color: #666;">
-                    <a href="${article.url}" target="_blank" style="color: #667eea;">查看原文 →</a>
-                </p>
             `;
 
             document.getElementById('article-detail').innerHTML = detailHtml;
@@ -216,7 +271,7 @@ function closeModal() {
 
 // 分析单篇文章
 async function analyzeArticle(articleId) {
-    if (!confirm('确定要分析这篇文章吗？这将调用Claude API并产生费用。')) {
+    if (!confirm('确定要分析这篇文章吗？这将调用LLM API。')) {
         return;
     }
 
@@ -254,7 +309,7 @@ async function analyzeBatch() {
         return;
     }
 
-    if (!confirm(`确定要分析 ${limit} 篇文章吗？这将调用Claude API并产生费用。`)) {
+    if (!confirm(`确定要分析 ${limit} 篇文章吗？这将调用LLM API。`)) {
         return;
     }
 
@@ -734,7 +789,7 @@ async function bulkAnalyze() {
         return;
     }
 
-    if (!confirm(`确定要分析选中的 ${selectedArticles.size} 篇文章吗？这将调用Claude API并产生费用。`)) {
+    if (!confirm(`确定要分析选中的 ${selectedArticles.size} 篇文章吗？这将调用LLM API。`)) {
         return;
     }
 
@@ -849,6 +904,51 @@ function renderSidebarTrending() {
             <span class="sidebar-title">${escapeHtml(item.title)}</span>
         </a>`;
     }).join('');
+}
+
+// ==================== 首页侧边栏采集入库 ====================
+
+async function collectSidebarPlatform() {
+    const platform = currentSidebarPlatform;
+    const names = {weibo:'微博',zhihu:'知乎',baidu:'百度',douyin:'抖音'};
+    const name = names[platform] || platform;
+
+    const items = sidebarTrendingData[platform] || [];
+    if (items.length === 0) {
+        alert('该平台暂无热点数据');
+        return;
+    }
+
+    if (!confirm(`确定采集${name}的${items.length}条热点文章入库？`)) return;
+
+    const btn = document.getElementById('sidebar-collect-btn');
+    btn.disabled = true;
+    btn.textContent = '⏳ 采集中...';
+
+    try {
+        const resp = await fetch('/api/trending/collect', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ platform: platform, analyze: true })
+        });
+        const data = await resp.json();
+
+        if (data.success) {
+            const r = data.data;
+            btn.textContent = `✅ 成功${r.collected}篇`;
+            alert(`采集完成！\n成功: ${r.collected} 篇\n分析: ${r.analyzed || 0} 篇\n跳过: ${r.skipped} 篇\n失败: ${r.failed} 篇`);
+            refreshData();
+        } else {
+            alert('采集失败: ' + (data.error || '未知错误'));
+        }
+    } catch (e) {
+        alert('采集失败: ' + e.message);
+    } finally {
+        setTimeout(() => {
+            btn.disabled = false;
+            btn.textContent = '📥 采集当前平台热点入库';
+        }, 3000);
+    }
 }
 
 // ==================== 生成文章功能 ====================

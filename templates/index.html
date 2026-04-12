@@ -140,6 +140,7 @@
                 <div class="sidebar-list" id="sidebar-trending-list">
                     <div class="loading" style="padding:20px;font-size:0.9em;">加载中...</div>
                 </div>
+                <button class="sidebar-collect-btn" id="sidebar-collect-btn" onclick="collectSidebarPlatform()">📥 采集当前平台热点入库</button>
             </div>
         </div><!-- end main-layout -->
 
@@ -197,7 +198,7 @@
             <div id="collect-search-tab" class="collect-tab-content">
                 <p class="tab-desc">搜索关键词并采集文章（可能遇到验证码）</p>
                 <input type="text" id="search-keyword-input" class="url-input"
-                       placeholder="输入搜索关键词，如：Claude、GPT、大模型">
+                       placeholder="输入搜索关键词，如：热点话题、社会新闻">
                 <input type="number" id="search-max-input" class="url-input"
                        placeholder="最多采集数量（建议不超过10）" value="5" min="1" max="20">
                 <button class="btn btn-success" onclick="collectFromSearch()">
