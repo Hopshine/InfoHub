@@ -55,7 +55,19 @@
       "Bash(curl -s -X POST \"http://localhost:9000/api/trending/collect\" -H 'Content-Type: application/json' -d '{\"platform\": \"zhihu\", \"limit\": 3, \"analyze\": false}' | python3 -c \"import json,sys;d=json.load\\(sys.stdin\\);r=d['data'];print\\(f'知乎: 成功{r[\\\\\"collected\\\\\"]}/{r[\\\\\"total\\\\\"]} 跳过{r[\\\\\"skipped\\\\\"]} 失败{r[\\\\\"failed\\\\\"]}'\\)\")",
       "Bash(curl -s -X POST \"http://localhost:9000/api/trending/collect\" -H 'Content-Type: application/json' -d '{\"platform\": \"baidu\", \"limit\": 3, \"analyze\": false}' | python3 -c \"import json,sys;d=json.load\\(sys.stdin\\);r=d['data'];print\\(f'百度: 成功{r[\\\\\"collected\\\\\"]}/{r[\\\\\"total\\\\\"]} 跳过{r[\\\\\"skipped\\\\\"]} 失败{r[\\\\\"failed\\\\\"]}'\\)\")",
       "Bash(python3 -c \"\nimport sqlite3\nconn = sqlite3.connect\\('data/articles.db'\\)\nc = conn.cursor\\(\\)\nc.execute\\('SELECT source, COUNT\\(*\\) as cnt FROM articles WHERE source IN \\(\\\\\"weibo\\\\\",\\\\\"zhihu\\\\\",\\\\\"baidu\\\\\",\\\\\"douyin\\\\\"\\) GROUP BY source'\\)\nprint\\('=== 平台来源文章统计 ==='\\)\nfor row in c.fetchall\\(\\):\n    print\\(f'  {row[0]}: {row[1]}篇'\\)\nc.execute\\('SELECT COUNT\\(*\\) FROM articles'\\)\nprint\\(f'\\\\n文章库总数: {c.fetchone\\(\\)[0]}'\\)\nconn.close\\(\\)\n\")",
-      "Bash(python3 -c \"\nimport sqlite3\nconn = sqlite3.connect\\('data/articles.db'\\)\nc = conn.cursor\\(\\)\nc.execute\\('SELECT url FROM trending WHERE platform=\\\\\"weibo\\\\\" LIMIT 5'\\)\nprint\\('=== 微博热搜URL示例 ==='\\)\nfor row in c.fetchall\\(\\):\n    print\\(row[0]\\)\nprint\\(\\)\nc.execute\\('SELECT url FROM trending WHERE platform=\\\\\"zhihu\\\\\" LIMIT 5'\\)\nprint\\('=== 知乎热榜URL示例 ==='\\)\nfor row in c.fetchall\\(\\):\n    print\\(row[0]\\)\nconn.close\\(\\)\n\")"
+      "Bash(python3 -c \"\nimport sqlite3\nconn = sqlite3.connect\\('data/articles.db'\\)\nc = conn.cursor\\(\\)\nc.execute\\('SELECT url FROM trending WHERE platform=\\\\\"weibo\\\\\" LIMIT 5'\\)\nprint\\('=== 微博热搜URL示例 ==='\\)\nfor row in c.fetchall\\(\\):\n    print\\(row[0]\\)\nprint\\(\\)\nc.execute\\('SELECT url FROM trending WHERE platform=\\\\\"zhihu\\\\\" LIMIT 5'\\)\nprint\\('=== 知乎热榜URL示例 ==='\\)\nfor row in c.fetchall\\(\\):\n    print\\(row[0]\\)\nconn.close\\(\\)\n\")",
+      "Bash(sqlite3 /c/Users/Administrator/code/infoHub/data/demo.db \"SELECT source, COUNT\\(*\\) as count FROM hotnews GROUP BY source ORDER BY count DESC LIMIT 10;\")",
+      "Bash(sqlite3 /c/Users/Administrator/code/infoHub/data/demo.db \"SELECT COUNT\\(*\\) as total, SUM\\(CASE WHEN status='collected' THEN 1 ELSE 0 END\\) as collected, SUM\\(CASE WHEN status='pending' THEN 1 ELSE 0 END\\) as pending FROM hotnews;\")",
+      "Bash(sqlite3 /c/Users/Administrator/code/infoHub/data/demo.db \"SELECT source, url FROM hotnews WHERE status='pending' LIMIT 5;\")",
+      "Bash(python3 -c \"import sqlite3; conn = sqlite3.connect\\('/c/Users/Administrator/code/infoHub/data/demo.db'\\); cursor = conn.cursor\\(\\); cursor.execute\\('SELECT source, url FROM hotnews WHERE status=\\\\\"pending\\\\\" LIMIT 5'\\); print\\('\\\\n'.join\\([f'{r[0]}: {r[1]}' for r in cursor.fetchall\\(\\)]\\)\\)\")",
+      "Bash(python3 -c \"import sqlite3; conn = sqlite3.connect\\('/c/Users/Administrator/code/infoHub/data/demo.db'\\); cursor = conn.cursor\\(\\); cursor.execute\\('SELECT COUNT\\(*\\) as total, SUM\\(CASE WHEN status=\\\\\"collected\\\\\" THEN 1 ELSE 0 END\\) as collected, SUM\\(CASE WHEN status=\\\\\"pending\\\\\" THEN 1 ELSE 0 END\\) as pending FROM hotnews'\\); print\\(cursor.fetchone\\(\\)\\)\")",
+      "Read(//c/Users/Administrator/.claude/plans/**)",
+      "Bash(touch \"hidden-nibbling-fog-agent-a0b3b93a19484bc38.md\")",
+      "Bash(set PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.npmmirror.com/binaries/playwright)",
+      "Bash(where msedge:*)",
+      "Read(//c/Program Files \\(x86\\)/Microsoft/Edge/Application/**)",
+      "Read(//c/Program Files/Microsoft/Edge/Application/**)",
+      "Read(//c/Program Files/Google/Chrome/Application/**)"
     ]
   }
 }

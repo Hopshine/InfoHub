@@ -39,6 +39,23 @@ class Config:
     HOTNEWS_SOURCES = os.getenv('HOTNEWS_SOURCES', 'toutiao,baidu,weibo').split(',')
     HOTNEWS_REFRESH_INTERVAL = int(os.getenv('HOTNEWS_REFRESH_INTERVAL', 30))  # 分钟
 
+    # Playwright浏览器配置
+    USE_PLAYWRIGHT = os.getenv('USE_PLAYWRIGHT', 'true').lower() == 'true'
+    PLAYWRIGHT_HEADLESS = os.getenv('PLAYWRIGHT_HEADLESS', 'true').lower() == 'true'
+    PLAYWRIGHT_TIMEOUT = int(os.getenv('PLAYWRIGHT_TIMEOUT', '30000'))  # 毫秒
+    MAX_BROWSER_INSTANCES = int(os.getenv('MAX_BROWSER_INSTANCES', '3'))
+
+    # 代理配置
+    PROXY_ENABLED = os.getenv('PROXY_ENABLED', 'false').lower() == 'true'
+    PROXY_LIST_FILE = os.getenv('PROXY_LIST_FILE', 'config/proxies.txt')
+    PROXY_ROTATION = os.getenv('PROXY_ROTATION', 'random')  # random 或 round-robin
+    PROXY_MAX_FAILURES = int(os.getenv('PROXY_MAX_FAILURES', '3'))
+
+    # 反检测配置
+    RANDOM_DELAY_MIN = float(os.getenv('RANDOM_DELAY_MIN', '1.0'))
+    RANDOM_DELAY_MAX = float(os.getenv('RANDOM_DELAY_MAX', '3.0'))
+    SIMULATE_HUMAN_BEHAVIOR = os.getenv('SIMULATE_HUMAN_BEHAVIOR', 'true').lower() == 'true'
+
     # 文章生成配置
     ARTICLE_MODEL = os.getenv('ARTICLE_MODEL', os.getenv('ANALYSIS_MODEL', 'claude-sonnet-4-6'))
     ARTICLE_STYLE = os.getenv('ARTICLE_STYLE', 'news')  # news, comment, deep

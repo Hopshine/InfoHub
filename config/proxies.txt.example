@@ -1,0 +1,20 @@
+# 代理配置示例文件
+# 每行一个代理，支持 HTTP/HTTPS/SOCKS5 协议
+# 格式: protocol://[username:password@]host:port
+
+# HTTP 代理示例
+# http://proxy1.example.com:8080
+# http://username:password@proxy2.example.com:8080
+
+# HTTPS 代理示例
+# https://proxy3.example.com:443
+
+# SOCKS5 代理示例
+# socks5://proxy4.example.com:1080
+# socks5://username:password@proxy5.example.com:1080
+
+# 使用说明:
+# 1. 复制此文件为 proxies.txt
+# 2. 取消注释并填入真实代理地址
+# 3. 在环境变量中设置 PROXY_ENABLED=true 启用代理
+# 4. 可选: 设置 PROXY_ROTATION=random 或 round-robin 选择轮换策略

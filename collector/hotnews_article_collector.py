@@ -1,7 +1,9 @@
 """
 热点新闻文章采集器 - 从热点新闻URL爬取完整文章内容
 支持多种新闻源：微博、百度、今日头条等
+集成Playwright浏览器自动化，支持JavaScript渲染页面和反爬
 """
+import asyncio
 import requests
 from bs4 import BeautifulSoup
 import time
@@ -14,8 +16,23 @@ from urllib.parse import urlparse
 logger = setup_logger('hotnews_article_collector')
 
 
+def _run_async(coro):
+    """在同步代码中安全运行异步协程"""
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                future = pool.submit(asyncio.run, coro)
+                return future.result()
+        else:
+            return loop.run_until_complete(coro)
+    except RuntimeError:
+        return asyncio.run(coro)
+
+
 class HotNewsArticleCollector:
-    """热点新闻文章采集器 - 从热点URL抓取原文"""
+    """热点新闻文章采集器 - 从热点URL抓取原文，集成Playwright支持"""
 
     def __init__(self):
         self.headers = {
@@ -36,6 +53,72 @@ class HotNewsArticleCollector:
         }
         self.session = requests.Session()
         self.session.headers.update(self.headers)
+
+        # 初始化Playwright浏览器管理器（懒加载）
+        self._browser_manager = None
+        self._playwright_available = self._check_playwright()
+
+    def _check_playwright(self) -> bool:
+        """检查Playwright是否可用"""
+        try:
+            from config import Config
+            if not Config.USE_PLAYWRIGHT:
+                logger.info("Playwright已禁用（配置）")
+                return False
+        except Exception:
+            pass
+
+        try:
+            import importlib.util
+            if importlib.util.find_spec('playwright') is None:
+                logger.warning("Playwright未安装，将使用requests回退模式")
+                return False
+            logger.info("Playwright可用，将用于JavaScript渲染页面")
+            return True
+        except Exception:
+            logger.warning("Playwright未安装，将使用requests回退模式")
+            return False
+
+    def _get_browser_manager(self):
+        """懒加载获取浏览器管理器"""
+        if not self._playwright_available:
+            return None
+
+        if self._browser_manager is None:
+            try:
+                from crawler.browser_manager import BrowserManager
+                from crawler.proxy_manager import ProxyManager
+                from config import Config
+
+                # 初始化代理管理器
+                proxy_manager = None
+                if Config.PROXY_ENABLED:
+                    proxy_manager = ProxyManager(
+                        proxy_file=Config.PROXY_LIST_FILE,
+                        max_failures=Config.PROXY_MAX_FAILURES
+                    )
+
+                # 初始化浏览器管理器
+                self._browser_manager = BrowserManager(
+                    headless=Config.PLAYWRIGHT_HEADLESS,
+                    max_contexts=Config.MAX_BROWSER_INSTANCES,
+                    proxy_manager=proxy_manager
+                )
+                logger.info("浏览器管理器初始化成功")
+            except Exception as e:
+                logger.error(f"浏览器管理器初始化失败: {e}")
+                self._playwright_available = False
+                return None
+
+        return self._browser_manager
+
+    def __del__(self):
+        """清理资源"""
+        if self._browser_manager:
+            try:
+                _run_async(self._browser_manager.cleanup())
+            except Exception as e:
+                logger.error(f"清理浏览器资源失败: {e}")
 
     # ==================== 核心方法 ====================
 
@@ -231,7 +314,324 @@ class HotNewsArticleCollector:
             logger.error(f"微信文章采集失败: {e}")
             return None
 
+    def _fetch_weibo_article(self, url: str, hotnews_item: Dict) -> Optional[Dict]:
+        """
+        采集微博文章 - 优先使用Playwright处理搜索页
+
+        微博热搜URL通常是搜索结果页，需要JavaScript渲染
+        """
+        # 优先尝试Playwright
+        if self._playwright_available:
+            try:
+                article = _run_async(self._fetch_weibo_playwright(url, hotnews_item))
+                if article:
+                    return article
+                logger.warning(f"Playwright采集微博失败，尝试回退方案")
+            except Exception as e:
+                logger.error(f"Playwright采集微博异常: {e}")
+
+        # 回退到搜索方案
+        return self._fetch_via_search(url, hotnews_item.get('title', ''))
+
     def _fetch_zhihu_article(self, url: str) -> Optional[Dict]:
+        """
+        采集知乎问题/文章 - 优先使用Playwright绕过反爬
+        """
+        # 优先尝试Playwright
+        if self._playwright_available:
+            try:
+                article = _run_async(self._fetch_zhihu_playwright(url))
+                if article:
+                    return article
+                logger.warning(f"Playwright采集知乎失败，尝试requests")
+            except Exception as e:
+                logger.error(f"Playwright采集知乎异常: {e}")
+
+        # 回退到requests方案
+        return self._fetch_zhihu_requests(url)
+
+    def _fetch_baidu_article(self, url: str, hotnews_item: Dict) -> Optional[Dict]:
+        """
+        采集百度热搜文章 - 优先使用Playwright
+        """
+        # 优先尝试Playwright
+        if self._playwright_available:
+            try:
+                article = _run_async(self._fetch_baidu_playwright(url, hotnews_item))
+                if article:
+                    return article
+                logger.warning(f"Playwright采集百度失败，尝试回退")
+            except Exception as e:
+                logger.error(f"Playwright采集百度异常: {e}")
+
+        # 回退到搜索方案
+        return self._fetch_via_search(url, hotnews_item.get('title', ''))
+
+    def _fetch_toutiao_article(self, url: str, hotnews_item: Dict) -> Optional[Dict]:
+        """
+        采集今日头条/抖音文章 - 优先使用Playwright
+        """
+        # 优先尝试Playwright
+        if self._playwright_available:
+            try:
+                article = _run_async(self._fetch_toutiao_playwright(url, hotnews_item))
+                if article:
+                    return article
+                logger.warning(f"Playwright采集头条失败，尝试回退")
+            except Exception as e:
+                logger.error(f"Playwright采集头条异常: {e}")
+
+        # 回退到搜索方案
+        return self._fetch_via_search(url, hotnews_item.get('title', ''))
+
+    # ==================== Playwright采集方法 ====================
+
+    async def _fetch_weibo_playwright(self, url: str, hotnews_item: Dict) -> Optional[Dict]:
+        """使用Playwright采集微博搜索页面的文章"""
+        browser_manager = self._get_browser_manager()
+        if not browser_manager:
+            return None
+
+        context = None
+        try:
+            from config import Config
+            context = await browser_manager.get_context(use_proxy=Config.PROXY_ENABLED)
+            page = await browser_manager.create_page(context)
+
+            logger.info(f"Playwright加载微博页面: {url}")
+            await page.goto(url, wait_until='networkidle', timeout=Config.PLAYWRIGHT_TIMEOUT)
+
+            # 等待内容加载
+            await page.wait_for_timeout(random.randint(2000, 4000))
+
+            # 提取第一条微博内容
+            title = hotnews_item.get('title', '')
+            content = ''
+
+            # 尝试多个选择器
+            selectors = [
+                '.card-wrap .txt',
+                '.card .content',
+                'article .txt',
+                '.weibo-text'
+            ]
+
+            for selector in selectors:
+                try:
+                    element = await page.query_selector(selector)
+                    if element:
+                        content = await element.inner_text()
+                        if content:
+                            break
+                except Exception:
+                    continue
+
+            if not content:
+                logger.warning("未找到微博内容")
+                return None
+
+            return {
+                'title': title,
+                'content': content[:5000],  # 限制长度
+                'url': url,
+                'source': 'weibo',
+            }
+
+        except Exception as e:
+            logger.error(f"Playwright采集微博失败: {e}")
+            return None
+        finally:
+            if context:
+                await browser_manager.close_context(context)
+
+    async def _fetch_zhihu_playwright(self, url: str) -> Optional[Dict]:
+        """使用Playwright采集知乎内容"""
+        browser_manager = self._get_browser_manager()
+        if not browser_manager:
+            return None
+
+        context = None
+        try:
+            from config import Config
+            context = await browser_manager.get_context(use_proxy=Config.PROXY_ENABLED)
+            page = await browser_manager.create_page(context)
+
+            logger.info(f"Playwright加载知乎页面: {url}")
+            await page.goto(url, wait_until='domcontentloaded', timeout=Config.PLAYWRIGHT_TIMEOUT)
+
+            # 模拟人类行为
+            await browser_manager.simulate_human_behavior(page)
+
+            # 等待内容加载
+            await page.wait_for_selector('.QuestionHeader-title, .Post-Title', timeout=10000)
+
+            # 提取标题
+            title = ''
+            title_selectors = ['.QuestionHeader-title', '.Post-Title', 'h1.title']
+            for selector in title_selectors:
+                try:
+                    element = await page.query_selector(selector)
+                    if element:
+                        title = await element.inner_text()
+                        break
+                except Exception:
+                    continue
+
+            # 提取内容
+            content = ''
+            content_selectors = [
+                '.RichContent-inner',
+                '.Post-RichTextContainer',
+                '.QuestionAnswer-content',
+                'article .content'
+            ]
+            for selector in content_selectors:
+                try:
+                    element = await page.query_selector(selector)
+                    if element:
+                        content = await element.inner_text()
+                        if content:
+                            break
+                except Exception:
+                    continue
+
+            if not title or not content:
+                logger.warning("知乎内容提取不完整")
+                return None
+
+            return {
+                'title': title,
+                'content': content[:8000],
+                'url': url,
+                'source': 'zhihu',
+            }
+
+        except Exception as e:
+            logger.error(f"Playwright采集知乎失败: {e}")
+            return None
+        finally:
+            if context:
+                await browser_manager.close_context(context)
+
+    async def _fetch_baidu_playwright(self, url: str, hotnews_item: Dict) -> Optional[Dict]:
+        """使用Playwright采集百度热搜内容"""
+        browser_manager = self._get_browser_manager()
+        if not browser_manager:
+            return None
+
+        context = None
+        try:
+            from config import Config
+            context = await browser_manager.get_context(use_proxy=Config.PROXY_ENABLED)
+            page = await browser_manager.create_page(context)
+
+            logger.info(f"Playwright加载百度页面: {url}")
+            await page.goto(url, wait_until='networkidle', timeout=Config.PLAYWRIGHT_TIMEOUT)
+
+            await page.wait_for_timeout(random.randint(1000, 3000))
+
+            # 提取第一个搜索结果
+            title = hotnews_item.get('title', '')
+            content = ''
+
+            # 尝试点击第一个搜索结果
+            try:
+                first_result = await page.query_selector('.result, .c-container')
+                if first_result:
+                    link = await first_result.query_selector('a')
+                    if link:
+                        await link.click()
+                        await page.wait_for_load_state('networkidle', timeout=15000)
+
+                        # 提取文章内容
+                        content_selectors = ['article', '.article-content', '.content', 'main']
+                        for selector in content_selectors:
+                            try:
+                                element = await page.query_selector(selector)
+                                if element:
+                                    content = await element.inner_text()
+                                    if len(content) > 200:
+                                        break
+                            except Exception:
+                                continue
+            except Exception as e:
+                logger.warning(f"百度搜索结果点击失败: {e}")
+
+            if not content:
+                return None
+
+            return {
+                'title': title,
+                'content': content[:8000],
+                'url': page.url,
+                'source': 'baidu',
+            }
+
+        except Exception as e:
+            logger.error(f"Playwright采集百度失败: {e}")
+            return None
+        finally:
+            if context:
+                await browser_manager.close_context(context)
+
+    async def _fetch_toutiao_playwright(self, url: str, hotnews_item: Dict) -> Optional[Dict]:
+        """使用Playwright采集今日头条/抖音内容"""
+        browser_manager = self._get_browser_manager()
+        if not browser_manager:
+            return None
+
+        context = None
+        try:
+            from config import Config
+            context = await browser_manager.get_context(use_proxy=Config.PROXY_ENABLED)
+            page = await browser_manager.create_page(context)
+
+            logger.info(f"Playwright加载头条页面: {url}")
+            await page.goto(url, wait_until='networkidle', timeout=Config.PLAYWRIGHT_TIMEOUT)
+
+            await browser_manager.simulate_human_behavior(page)
+
+            # 提取标题和内容
+            title = hotnews_item.get('title', '')
+            content = ''
+
+            content_selectors = [
+                'article',
+                '.article-content',
+                '.content',
+                '.video-info'
+            ]
+
+            for selector in content_selectors:
+                try:
+                    element = await page.query_selector(selector)
+                    if element:
+                        content = await element.inner_text()
+                        if len(content) > 100:
+                            break
+                except Exception:
+                    continue
+
+            if not content:
+                return None
+
+            return {
+                'title': title,
+                'content': content[:8000],
+                'url': url,
+                'source': 'toutiao',
+            }
+
+        except Exception as e:
+            logger.error(f"Playwright采集头条失败: {e}")
+            return None
+        finally:
+            if context:
+                await browser_manager.close_context(context)
+
+    # ==================== Requests回退方法 ====================
+
+    def _fetch_zhihu_requests(self, url: str) -> Optional[Dict]:
         """采集知乎问题/文章"""
         try:
             # 知乎需要cookie模拟登录状态
@@ -290,85 +690,6 @@ class HotNewsArticleCollector:
             logger.error(f"知乎内容采集失败: {e}")
             return None
 
-    def _fetch_weibo_article(self, url: str,
-                             hotnews_item: Dict = None) -> Optional[Dict]:
-        """采集微博内容（微博热搜URL是搜索页，改用百度搜新闻原文）"""
-        title = (hotnews_item or {}).get('title', '')
-        # 微博热搜链接是搜索结果页，通过百度搜索获取新闻原文
-        return self._fetch_via_search(url, title)
-
-    def _fetch_baidu_article(self, url: str,
-                             hotnews_item: Dict = None) -> Optional[Dict]:
-        """采集百度热搜文章（百度热搜URL是搜索页，获取实际新闻文章）"""
-        try:
-            resp = self.session.get(url, timeout=15, allow_redirects=True)
-            resp.encoding = 'utf-8'
-            if resp.status_code != 200:
-                return None
-
-            soup = BeautifulSoup(resp.text, 'html.parser')
-
-            # 检查是否是搜索结果页
-            if ('baidu.com/s?' in url or 'baidu.com/s?' in resp.url
-                    or 'm.baidu.com/s' in url):
-                # 搜索结果页，用热点标题通过百度新闻搜索
-                title = (hotnews_item or {}).get('title', '')
-                if title:
-                    return self._fetch_via_search(url, title)
-                return None
-
-            # 百家号文章页面直接提取
-            title = ''
-            for sel in ['h1.article-title', 'h2.article-title',
-                        'div.article-title', 'h1']:
-                el = soup.select_one(sel)
-                if el and el.get_text(strip=True):
-                    title = el.get_text(strip=True)
-                    break
-
-            if not title:
-                title = self._extract_title(soup)
-
-            author = ''
-            for sel in ['span.author-name', 'div.author-name',
-                        'a.author-name']:
-                el = soup.select_one(sel)
-                if el and el.get_text(strip=True):
-                    author = el.get_text(strip=True)
-                    break
-
-            content = ''
-            for sel in ['div.article-content', 'article',
-                        'div.index-module_articleWrap']:
-                el = soup.select_one(sel)
-                if el:
-                    content = self._clean_html_content(el)
-                    if len(content) > 100:
-                        break
-
-            if not content:
-                content = self._extract_main_content(soup)
-
-            if not title or not content:
-                return None
-
-            return {
-                'title': title,
-                'content': content,
-                'account_name': author or '百度资讯',
-                'url': resp.url,
-                'source': 'baidu',
-            }
-        except Exception as e:
-            logger.error(f"百度文章采集失败: {e}")
-            return None
-
-    def _fetch_toutiao_article(self, url: str,
-                               hotnews_item: Dict = None) -> Optional[Dict]:
-        """采集今日头条/抖音热点（搜索页URL，改用百度搜新闻原文）"""
-        title = (hotnews_item or {}).get('title', '')
-        return self._fetch_via_search(url, title)
-
     def _fetch_via_search(self, original_url: str,
                           keyword: str) -> Optional[Dict]:
         """通过Bing搜索获取热点相关的实际新闻文章"""
@@ -402,15 +723,16 @@ class HotNewsArticleCollector:
                          news_domains: list) -> Optional[Dict]:
         """Bing网页搜索"""
         try:
+            # 不发送 br 避免 Bing 返回 brotli 压缩（requests 不支持解压）
             resp = self.session.get(
                 'https://cn.bing.com/search',
                 params={'q': keyword},
+                headers={'Accept-Encoding': 'gzip, deflate'},
                 timeout=15)
-            resp.encoding = 'utf-8'
             if resp.status_code != 200:
                 return None
 
-            soup = BeautifulSoup(resp.text, 'html.parser')
+            soup = BeautifulSoup(resp.content, 'html.parser')
             results = soup.select('li.b_algo h2 a')
 
             # 优先新闻网站
@@ -446,23 +768,25 @@ class HotNewsArticleCollector:
             resp = self.session.get(
                 'https://cn.bing.com/news/search',
                 params={'q': keyword},
+                headers={'Accept-Encoding': 'gzip, deflate'},
                 timeout=15)
-            resp.encoding = 'utf-8'
             if resp.status_code != 200:
                 return None
 
-            soup = BeautifulSoup(resp.text, 'html.parser')
+            soup = BeautifulSoup(resp.content, 'html.parser')
 
-            # Bing新闻结果
-            for link in soup.select('a.title'):
-                href = link.get('href', '')
-                if (href and href.startswith('http')
-                        and 'bing.com' not in href
-                        and 'msn.com' not in href):
-                    article = self._fetch_generic_article(href)
-                    if article and len(article.get('content', '')) > 100:
-                        article['hotnews_keyword'] = keyword
-                        return article
+            # Bing新闻结果 - 尝试多个选择器
+            for sel in ['a.title', '.news-card a[href]', 'div.news-card h4 a',
+                        '#algocore a[href]', 'div.t_t a[href]']:
+                for link in soup.select(sel):
+                    href = link.get('href', '')
+                    if (href and href.startswith('http')
+                            and 'bing.com' not in href
+                            and 'msn.com' not in href):
+                        article = self._fetch_generic_article(href)
+                        if article and len(article.get('content', '')) > 100:
+                            article['hotnews_keyword'] = keyword
+                            return article
 
             return None
         except Exception as e:
