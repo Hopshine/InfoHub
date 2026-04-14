@@ -2,6 +2,8 @@
 浏览器管理器 - 管理Playwright浏览器生命周期、反检测和资源池化
 """
 import asyncio
+import os
+import threading
 from typing import Optional, Dict, List
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page
 import random
@@ -12,7 +14,7 @@ logger = setup_logger('browser_manager')
 
 
 class BrowserManager:
-    """Playwright浏览器管理器 - 支持反检测和资源池化"""
+    """Playwright浏览器管理器 - 支持反检测、资源池化和Chrome登录态复用"""
 
     # 用户代理池
     USER_AGENTS = [
@@ -26,7 +28,9 @@ class BrowserManager:
     def __init__(self,
                  headless: bool = True,
                  max_contexts: int = 3,
-                 proxy_manager: Optional[ProxyManager] = None):
+                 proxy_manager: Optional[ProxyManager] = None,
+                 chrome_user_data_dir: str = '',
+                 cdp_url: str = ''):
         """
         初始化浏览器管理器
 
@@ -34,47 +38,70 @@ class BrowserManager:
             headless: 是否无头模式
             max_contexts: 最大并发浏览器上下文数
             proxy_manager: 代理管理器实例
+            chrome_user_data_dir: Chrome用户数据目录（未使用）
+            cdp_url: Chrome DevTools Protocol URL，如 http://localhost:9222
         """
         self.headless = headless
         self.max_contexts = max_contexts
         self.proxy_manager = proxy_manager
+        self.chrome_user_data_dir = chrome_user_data_dir
+        self.cdp_url = cdp_url
 
         self.playwright = None
         self.browser: Optional[Browser] = None
         self.contexts: List[BrowserContext] = []
         self._initialized = False
+        self._init_lock = asyncio.Lock()
+        self._context_lock = asyncio.Lock()
+        self._cookies: List[Dict] = []  # Chrome导出的cookies
+        self._is_cdp_browser = False  # 是否通过CDP连接
 
     async def initialize(self):
         """初始化Playwright和浏览器"""
-        if self._initialized:
-            return
+        async with self._init_lock:
+            if self._initialized:
+                return
 
-        try:
-            self.playwright = await async_playwright().start()
-            self.browser = await self.playwright.chromium.launch(
-                headless=self.headless,
-                channel='chrome',  # 使用系统已安装的Chrome，无需单独下载Chromium
-                args=[
-                    '--disable-blink-features=AutomationControlled',
-                    '--disable-dev-shm-usage',
-                    '--no-sandbox',
-                    '--disable-setuid-sandbox',
-                    '--disable-web-security',
-                    '--disable-features=IsolateOrigins,site-per-process',
-                ]
-            )
-            self._initialized = True
-            logger.info(f"浏览器初始化成功 (headless={self.headless})")
-        except Exception as e:
-            logger.error(f"浏览器初始化失败: {e}")
-            raise
+            try:
+                self.playwright = await async_playwright().start()
+
+                # 优先通过CDP连接运行中的Chrome（复用登录态）
+                if self.cdp_url:
+                    try:
+                        self.browser = await self.playwright.chromium.connect_over_cdp(self.cdp_url)
+                        self._is_cdp_browser = True
+                        self._initialized = True
+                        logger.info(f"通过CDP连接Chrome成功 ({self.cdp_url})，复用登录态")
+                        return
+                    except Exception as e:
+                        logger.warning(f"CDP连接失败: {e}，回退到独立浏览器模式")
+
+                # 回退：启动独立浏览器
+                self.browser = await self.playwright.chromium.launch(
+                    headless=self.headless,
+                    channel='chrome',
+                    args=[
+                        '--disable-blink-features=AutomationControlled',
+                        '--disable-dev-shm-usage',
+                        '--no-sandbox',
+                        '--disable-setuid-sandbox',
+                        '--disable-web-security',
+                        '--disable-features=IsolateOrigins,site-per-process',
+                    ]
+                )
+                self._initialized = True
+                logger.info(f"浏览器初始化成功 (headless={self.headless})")
+            except Exception as e:
+                logger.error(f"浏览器初始化失败: {e}")
+                raise
 
     async def get_context(self, use_proxy: bool = True) -> BrowserContext:
         """
-        获取或创建浏览器上下文
+        创建新的浏览器上下文（线程安全）
+        CDP模式下直接使用现有contexts
 
         Args:
-            use_proxy: 是否使用代理
+            use_proxy: 是否使用代理（CDP模式下忽略）
 
         Returns:
             浏览器上下文
@@ -82,13 +109,15 @@ class BrowserManager:
         if not self._initialized:
             await self.initialize()
 
-        # 如果上下文池已满，关闭最旧的
-        if len(self.contexts) >= self.max_contexts:
-            old_context = self.contexts.pop(0)
-            await old_context.close()
-            logger.debug("关闭最旧的浏览器上下文")
+        # CDP模式：使用浏览器的默认context（包含登录态）
+        if self._is_cdp_browser:
+            contexts = self.browser.contexts
+            if contexts:
+                return contexts[0]
+            # 如果没有context，创建一个
+            return await self.browser.new_context()
 
-        # 准备上下文配置
+        # 独立浏览器模式：创建新context
         context_options = self._get_context_options()
 
         # 添加代理配置
@@ -103,14 +132,13 @@ class BrowserManager:
                     context_options['proxy']['password'] = proxy['password']
                 logger.debug(f"使用代理: {proxy['server']}")
 
-        # 创建新上下文
         context = await self.browser.new_context(**context_options)
-
-        # 应用反检测措施
         await self._apply_stealth(context)
 
-        self.contexts.append(context)
-        logger.debug(f"创建新浏览器上下文 (当前: {len(self.contexts)}/{self.max_contexts})")
+        async with self._context_lock:
+            self.contexts.append(context)
+            ctx_count = len(self.contexts)
+        logger.debug(f"创建新浏览器上下文 (当前: {ctx_count})")
 
         return context
 
@@ -193,14 +221,16 @@ class BrowserManager:
 
     async def close_context(self, context: BrowserContext):
         """
-        关闭浏览器上下文
-
-        Args:
-            context: 要关闭的上下文
+        关闭浏览器上下文（线程安全）
+        CDP模式下不关闭context（共享的），只关闭page
         """
         try:
-            if context in self.contexts:
-                self.contexts.remove(context)
+            if self._is_cdp_browser:
+                return  # CDP模式不关闭context
+
+            async with self._context_lock:
+                if context in self.contexts:
+                    self.contexts.remove(context)
             await context.close()
             logger.debug("浏览器上下文已关闭")
         except Exception as e:

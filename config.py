@@ -43,7 +43,10 @@ class Config:
     USE_PLAYWRIGHT = os.getenv('USE_PLAYWRIGHT', 'true').lower() == 'true'
     PLAYWRIGHT_HEADLESS = os.getenv('PLAYWRIGHT_HEADLESS', 'true').lower() == 'true'
     PLAYWRIGHT_TIMEOUT = int(os.getenv('PLAYWRIGHT_TIMEOUT', '30000'))  # 毫秒
-    MAX_BROWSER_INSTANCES = int(os.getenv('MAX_BROWSER_INSTANCES', '3'))
+    MAX_BROWSER_INSTANCES = int(os.getenv('MAX_BROWSER_INSTANCES', '8'))
+
+    # Chrome CDP连接（复用登录态）
+    CHROME_CDP_URL = os.getenv('CHROME_CDP_URL', 'http://localhost:9222')
 
     # 代理配置
     PROXY_ENABLED = os.getenv('PROXY_ENABLED', 'false').lower() == 'true'
@@ -55,6 +58,9 @@ class Config:
     RANDOM_DELAY_MIN = float(os.getenv('RANDOM_DELAY_MIN', '1.0'))
     RANDOM_DELAY_MAX = float(os.getenv('RANDOM_DELAY_MAX', '3.0'))
     SIMULATE_HUMAN_BEHAVIOR = os.getenv('SIMULATE_HUMAN_BEHAVIOR', 'true').lower() == 'true'
+
+    # 采集并发配置
+    COLLECTOR_MAX_WORKERS = int(os.getenv('COLLECTOR_MAX_WORKERS', '5'))  # 采集器最大并发线程数
 
     # 文章生成配置
     ARTICLE_MODEL = os.getenv('ARTICLE_MODEL', os.getenv('ANALYSIS_MODEL', 'claude-sonnet-4-6'))

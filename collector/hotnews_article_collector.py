@@ -4,6 +4,7 @@
 集成Playwright浏览器自动化，支持JavaScript渲染页面和反爬
 """
 import asyncio
+import threading
 import requests
 from bs4 import BeautifulSoup
 import time
@@ -12,23 +13,36 @@ from typing import Dict, Optional, List
 from utils.logger import setup_logger
 import re
 from urllib.parse import urlparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 logger = setup_logger('hotnews_article_collector')
 
+# 专用事件循环和线程，保证Playwright连接在同一个循环中持续存活
+_loop = None
+_loop_thread = None
+_loop_lock = threading.Lock()
+
+# 全局单例浏览器管理器，多线程共享
+_global_browser_manager = None
+_browser_manager_lock = threading.Lock()
+
+
+def _get_event_loop():
+    """获取持久事件循环（在后台线程中运行）"""
+    global _loop, _loop_thread
+    with _loop_lock:
+        if _loop is None or _loop.is_closed():
+            _loop = asyncio.new_event_loop()
+            _loop_thread = threading.Thread(target=_loop.run_forever, daemon=True)
+            _loop_thread.start()
+    return _loop
+
 
 def _run_async(coro):
-    """在同步代码中安全运行异步协程"""
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                future = pool.submit(asyncio.run, coro)
-                return future.result()
-        else:
-            return loop.run_until_complete(coro)
-    except RuntimeError:
-        return asyncio.run(coro)
+    """在持久事件循环中运行异步协程，保证Playwright连接不被销毁"""
+    loop = _get_event_loop()
+    future = asyncio.run_coroutine_threadsafe(coro, loop)
+    return future.result(timeout=120)
 
 
 class HotNewsArticleCollector:
@@ -54,8 +68,7 @@ class HotNewsArticleCollector:
         self.session = requests.Session()
         self.session.headers.update(self.headers)
 
-        # 初始化Playwright浏览器管理器（懒加载）
-        self._browser_manager = None
+        # 检查Playwright是否可用
         self._playwright_available = self._check_playwright()
 
     def _check_playwright(self) -> bool:
@@ -80,45 +93,45 @@ class HotNewsArticleCollector:
             return False
 
     def _get_browser_manager(self):
-        """懒加载获取浏览器管理器"""
+        """获取全局单例浏览器管理器（线程安全）"""
+        global _global_browser_manager
+
         if not self._playwright_available:
             return None
 
-        if self._browser_manager is None:
-            try:
-                from crawler.browser_manager import BrowserManager
-                from crawler.proxy_manager import ProxyManager
-                from config import Config
+        with _browser_manager_lock:
+            if _global_browser_manager is None:
+                try:
+                    from crawler.browser_manager import BrowserManager
+                    from crawler.proxy_manager import ProxyManager
+                    from config import Config
 
-                # 初始化代理管理器
-                proxy_manager = None
-                if Config.PROXY_ENABLED:
-                    proxy_manager = ProxyManager(
-                        proxy_file=Config.PROXY_LIST_FILE,
-                        max_failures=Config.PROXY_MAX_FAILURES
+                    # 初始化代理管理器
+                    proxy_manager = None
+                    if Config.PROXY_ENABLED:
+                        proxy_manager = ProxyManager(
+                            proxy_file=Config.PROXY_LIST_FILE,
+                            max_failures=Config.PROXY_MAX_FAILURES
+                        )
+
+                    # 创建浏览器管理器（全局单例）
+                    _global_browser_manager = BrowserManager(
+                        headless=Config.PLAYWRIGHT_HEADLESS,
+                        max_contexts=Config.MAX_BROWSER_INSTANCES,
+                        proxy_manager=proxy_manager,
+                        cdp_url=Config.CHROME_CDP_URL,
                     )
+                    logger.info("浏览器管理器创建成功")
+                except Exception as e:
+                    logger.error(f"浏览器管理器创建失败: {e}")
+                    self._playwright_available = False
+                    return None
 
-                # 初始化浏览器管理器
-                self._browser_manager = BrowserManager(
-                    headless=Config.PLAYWRIGHT_HEADLESS,
-                    max_contexts=Config.MAX_BROWSER_INSTANCES,
-                    proxy_manager=proxy_manager
-                )
-                logger.info("浏览器管理器初始化成功")
-            except Exception as e:
-                logger.error(f"浏览器管理器初始化失败: {e}")
-                self._playwright_available = False
-                return None
-
-        return self._browser_manager
+        return _global_browser_manager
 
     def __del__(self):
-        """清理资源"""
-        if self._browser_manager:
-            try:
-                _run_async(self._browser_manager.cleanup())
-            except Exception as e:
-                logger.error(f"清理浏览器资源失败: {e}")
+        """清理资源（浏览器管理器是全局单例，不在此清理）"""
+        pass
 
     # ==================== 核心方法 ====================
 
@@ -176,46 +189,78 @@ class HotNewsArticleCollector:
             return None
 
     def collect_batch(self, hotnews_list: List[Dict],
-                      delay: tuple = (2, 5)) -> List[Dict]:
+                      delay: tuple = (2, 5),
+                      max_workers: int = None) -> List[Dict]:
         """
-        批量采集热点新闻文章
+        批量采集热点新闻文章（支持多线程并发）
 
         Args:
             hotnews_list: 热点新闻列表
-            delay: 请求间隔(最小秒数, 最大秒数)
+            delay: 请求间隔(最小秒数, 最大秒数) - 多线程时此参数无效
+            max_workers: 最大并发线程数，None则使用配置文件中的值
 
         Returns:
             成功采集的文章列表
         """
+        if max_workers is None:
+            from config import Config
+            max_workers = Config.COLLECTOR_MAX_WORKERS
+
         articles = []
         total = len(hotnews_list)
 
-        for i, item in enumerate(hotnews_list, 1):
-            logger.info(f"[{i}/{total}] 处理: {item.get('title', '')[:40]}")
+        if max_workers <= 1:
+            # 单线程模式
+            for i, item in enumerate(hotnews_list, 1):
+                logger.info(f"[{i}/{total}] 处理: {item.get('title', '')[:40]}")
+                article = self.collect_from_hotnews(item)
+                if article:
+                    articles.append(article)
+                if i < total:
+                    time.sleep(random.uniform(*delay))
+        else:
+            # 多线程并发模式
+            logger.info(f"启动多线程采集: {max_workers}个并发线程")
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_item = {
+                    executor.submit(self.collect_from_hotnews, item): (i, item)
+                    for i, item in enumerate(hotnews_list, 1)
+                }
 
-            article = self.collect_from_hotnews(item)
-            if article:
-                articles.append(article)
-
-            if i < total:
-                time.sleep(random.uniform(*delay))
+                for future in as_completed(future_to_item):
+                    i, item = future_to_item[future]
+                    try:
+                        article = future.result()
+                        if article:
+                            articles.append(article)
+                            logger.info(f"[{i}/{total}] 完成: {item.get('title', '')[:40]}")
+                        else:
+                            logger.warning(f"[{i}/{total}] 失败: {item.get('title', '')[:40]}")
+                    except Exception as e:
+                        logger.error(f"[{i}/{total}] 异常: {item.get('title', '')[:40]} - {e}")
 
         logger.info(f"批量采集完成: 成功 {len(articles)}/{total}")
         return articles
 
     def collect_and_save(self, db, hotnews_list: List[Dict],
-                         analyze: bool = True) -> Dict:
+                         analyze: bool = True,
+                         max_workers: int = None) -> Dict:
         """
-        采集热点文章并保存到数据库，可选自动分析
+        采集热点文章并保存到数据库，可选自动分析（支持多线程并发）
 
         Args:
             db: 数据库实例
             hotnews_list: 热点新闻列表
             analyze: 是否自动进行分析分类
+            max_workers: 最大并发线程数，None则使用配置文件中的值
 
         Returns:
             结果统计字典
         """
+        if max_workers is None:
+            from config import Config
+            max_workers = Config.COLLECTOR_MAX_WORKERS
+
         result = {
             'total': len(hotnews_list),
             'collected': 0,
@@ -225,42 +270,84 @@ class HotNewsArticleCollector:
             'articles': [],
         }
 
-        for i, item in enumerate(hotnews_list, 1):
+        # 过滤掉已存在的文章
+        items_to_collect = []
+        for item in hotnews_list:
             url = item.get('url', '').strip()
-            title = item.get('title', '')
-            logger.info(f"[{i}/{result['total']}] {title[:40]}")
-
-            # 跳过已存在的文章
             if url and db.article_exists(url):
-                logger.info(f"文章已存在，跳过")
+                logger.info(f"文章已存在，跳过: {item.get('title', '')[:40]}")
                 result['skipped'] += 1
-                continue
-
-            # 采集文章
-            article = self.collect_from_hotnews(item)
-            if not article or not article.get('content'):
-                result['failed'] += 1
-                continue
-
-            # 保存到数据库
-            article_id = db.insert_article(article)
-            if article_id:
-                article['id'] = article_id
-                result['collected'] += 1
-                result['articles'].append({
-                    'id': article_id,
-                    'title': article.get('title', ''),
-                    'hotnews_id': item.get('id'),
-                })
-
-                # 更新热点新闻状态为已采集
-                if item.get('id'):
-                    db.update_hotnews_status(item['id'], 'collected')
             else:
-                result['failed'] += 1
+                items_to_collect.append(item)
 
-            if i < result['total']:
-                time.sleep(random.uniform(2, 5))
+        if not items_to_collect:
+            logger.info("没有需要采集的新文章")
+            return result
+
+        # 采集文章
+        def collect_and_process(item):
+            """采集单个文章并返回结果"""
+            article = self.collect_from_hotnews(item)
+            return (item, article)
+
+        if max_workers <= 1:
+            # 单线程模式
+            for i, item in enumerate(items_to_collect, 1):
+                logger.info(f"[{i}/{len(items_to_collect)}] {item.get('title', '')[:40]}")
+                article = self.collect_from_hotnews(item)
+                if article and article.get('content'):
+                    article_id = db.insert_article(article)
+                    if article_id:
+                        article['id'] = article_id
+                        result['collected'] += 1
+                        result['articles'].append({
+                            'id': article_id,
+                            'title': article.get('title', ''),
+                            'hotnews_id': item.get('id'),
+                        })
+                        if item.get('id'):
+                            db.update_hotnews_status(item['id'], 'collected')
+                    else:
+                        result['failed'] += 1
+                else:
+                    result['failed'] += 1
+                if i < len(items_to_collect):
+                    time.sleep(random.uniform(2, 5))
+        else:
+            # 多线程并发模式
+            logger.info(f"启动多线程采集: {max_workers}个并发线程")
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_item = {
+                    executor.submit(collect_and_process, item): (i, item)
+                    for i, item in enumerate(items_to_collect, 1)
+                }
+
+                for future in as_completed(future_to_item):
+                    i, item = future_to_item[future]
+                    try:
+                        item, article = future.result()
+                        if article and article.get('content'):
+                            article_id = db.insert_article(article)
+                            if article_id:
+                                article['id'] = article_id
+                                result['collected'] += 1
+                                result['articles'].append({
+                                    'id': article_id,
+                                    'title': article.get('title', ''),
+                                    'hotnews_id': item.get('id'),
+                                })
+                                if item.get('id'):
+                                    db.update_hotnews_status(item['id'], 'collected')
+                                logger.info(f"[{i}/{len(items_to_collect)}] 完成: {item.get('title', '')[:40]}")
+                            else:
+                                result['failed'] += 1
+                                logger.warning(f"[{i}/{len(items_to_collect)}] 保存失败: {item.get('title', '')[:40]}")
+                        else:
+                            result['failed'] += 1
+                            logger.warning(f"[{i}/{len(items_to_collect)}] 采集失败: {item.get('title', '')[:40]}")
+                    except Exception as e:
+                        result['failed'] += 1
+                        logger.error(f"[{i}/{len(items_to_collect)}] 异常: {item.get('title', '')[:40]} - {e}")
 
         # 自动分析
         if analyze and result['collected'] > 0:
@@ -432,7 +519,7 @@ class HotNewsArticleCollector:
 
             return {
                 'title': title,
-                'content': content[:5000],  # 限制长度
+                'content': content,
                 'url': url,
                 'source': 'weibo',
             }
@@ -445,11 +532,12 @@ class HotNewsArticleCollector:
                 await browser_manager.close_context(context)
 
     async def _fetch_zhihu_playwright(self, url: str) -> Optional[Dict]:
-        """使用Playwright采集知乎内容"""
+        """使用Playwright采集知乎内容（取前5个回答的完整内容）"""
         browser_manager = self._get_browser_manager()
         if not browser_manager:
             return None
 
+        target_answers = 5  # 目标采集前5个回答
         context = None
         try:
             from config import Config
@@ -459,49 +547,88 @@ class HotNewsArticleCollector:
             logger.info(f"Playwright加载知乎页面: {url}")
             await page.goto(url, wait_until='domcontentloaded', timeout=Config.PLAYWRIGHT_TIMEOUT)
 
-            # 模拟人类行为
-            await browser_manager.simulate_human_behavior(page)
-
             # 等待内容加载
             await page.wait_for_selector('.QuestionHeader-title, .Post-Title', timeout=10000)
+            await page.wait_for_timeout(1000)
 
             # 提取标题
-            title = ''
-            title_selectors = ['.QuestionHeader-title', '.Post-Title', 'h1.title']
-            for selector in title_selectors:
-                try:
-                    element = await page.query_selector(selector)
-                    if element:
-                        title = await element.inner_text()
-                        break
-                except Exception:
-                    continue
+            title = await page.evaluate('''() => {
+                const el = document.querySelector('.QuestionHeader-title') ||
+                           document.querySelector('.Post-Title') ||
+                           document.querySelector('h1');
+                return el ? el.innerText.trim() : '';
+            }''')
 
-            # 提取内容
-            content = ''
-            content_selectors = [
-                '.RichContent-inner',
-                '.Post-RichTextContainer',
-                '.QuestionAnswer-content',
-                'article .content'
-            ]
-            for selector in content_selectors:
-                try:
-                    element = await page.query_selector(selector)
-                    if element:
-                        content = await element.inner_text()
-                        if content:
-                            break
-                except Exception:
-                    continue
+            # 先获取页面上已有的回答（展开折叠）
+            page_answers = await page.evaluate('''() => {
+                // 移除折叠
+                document.querySelectorAll('.RichContent.is-collapsed').forEach(el => el.classList.remove('is-collapsed'));
+                document.querySelectorAll('.ContentItem-expandButton, .RichContent-expandButton').forEach(el => el.remove());
 
-            if not title or not content:
+                const answers = [];
+                const seen = new Set();
+                document.querySelectorAll('.RichContent-inner').forEach(el => {
+                    const text = el.innerText.trim();
+                    if (text.length > 20 && !seen.has(text.substring(0, 80))) {
+                        seen.add(text.substring(0, 80));
+                        answers.push(text);
+                    }
+                });
+                return answers;
+            }''')
+
+            # 如果页面回答不够5个，尝试通过知乎API加载更多
+            api_answers = []
+            if len(page_answers) < target_answers:
+                # 从URL提取问题ID
+                import re
+                qid_match = re.search(r'/question/(\d+)', url)
+                if qid_match:
+                    qid = qid_match.group(1)
+                    try:
+                        api_answers = await page.evaluate('''async (params) => {
+                            const [qid, offset, limit] = params;
+                            try {
+                                const resp = await fetch(
+                                    `https://www.zhihu.com/api/v4/questions/${qid}/answers?offset=${offset}&limit=${limit}&sort_by=default&include=data[*].content`,
+                                    { credentials: 'include' }
+                                );
+                                if (!resp.ok) return [];
+                                const data = await resp.json();
+                                return (data.data || []).map(a => {
+                                    // 从HTML中提取纯文本
+                                    const div = document.createElement('div');
+                                    div.innerHTML = a.content || '';
+                                    return div.innerText.trim();
+                                }).filter(t => t.length > 20);
+                            } catch(e) {
+                                return [];
+                            }
+                        }''', [qid, len(page_answers), target_answers - len(page_answers)])
+                        if api_answers:
+                            logger.info(f"通过API额外加载了 {len(api_answers)} 个回答")
+                    except Exception as e:
+                        logger.debug(f"API加载回答失败: {e}")
+
+            # 合并回答，取前5个
+            all_answers = page_answers + api_answers
+            answers = all_answers[:target_answers]
+
+            if not title or not answers:
                 logger.warning("知乎内容提取不完整")
                 return None
 
+            # 拼接回答内容
+            if len(answers) > 1:
+                content_parts = [f"【回答{i+1}】\n{text}" for i, text in enumerate(answers)]
+            else:
+                content_parts = answers
+            content = '\n\n'.join(content_parts)
+
+            logger.info(f"知乎采集完成: {len(answers)}个回答, {len(content)}字符")
             return {
                 'title': title,
-                'content': content[:8000],
+                'content': content,
                 'url': url,
                 'source': 'zhihu',
             }
@@ -562,7 +689,7 @@ class HotNewsArticleCollector:
 
             return {
                 'title': title,
-                'content': content[:8000],
+                'content': content,
                 'url': page.url,
                 'source': 'baidu',
             }
@@ -617,7 +744,7 @@ class HotNewsArticleCollector:
 
             return {
                 'title': title,
-                'content': content[:8000],
+                'content': content,
                 'url': url,
                 'source': 'toutiao',
             }
@@ -632,7 +759,7 @@ class HotNewsArticleCollector:
     # ==================== Requests回退方法 ====================
 
     def _fetch_zhihu_requests(self, url: str) -> Optional[Dict]:
-        """采集知乎问题/文章"""
+        """采集知乎问题/文章（采集前5个回答的完整内容）"""
         try:
             # 知乎需要cookie模拟登录状态
             headers = dict(self.headers)
@@ -660,21 +787,43 @@ class HotNewsArticleCollector:
             if not title:
                 title = self._extract_title(soup)
 
-            # 提取回答内容
-            content = ''
-            # 获取最佳回答
-            answer_el = soup.select_one('div.RichContent-inner')
-            if answer_el:
-                content = self._clean_html_content(answer_el)
+            # 提取前5个回答的完整内容
+            content_parts = []
+            target_answers = 5
+
+            # 获取所有回答（去重）
+            answer_elements = soup.select('div.RichContent-inner')
+            seen = set()
+            for el in answer_elements:
+                if len(content_parts) >= target_answers:
+                    break
+                text = self._clean_html_content(el)
+                if text and len(text.strip()) > 20:
+                    # 用前100字符去重
+                    key = text[:100]
+                    if key not in seen:
+                        seen.add(key)
+                        content_parts.append(text.strip())
 
             # 知乎文章正文
-            if not content:
+            if not content_parts:
                 article_el = soup.select_one('div.Post-RichTextContainer')
                 if article_el:
-                    content = self._clean_html_content(article_el)
+                    text = self._clean_html_content(article_el)
+                    if text:
+                        content_parts.append(text.strip())
 
-            if not content:
+            # 通用回退
+            if not content_parts:
                 content = self._extract_main_content(soup)
+                if content:
+                    content_parts.append(content)
+
+            # 拼接回答
+            if len(content_parts) > 1:
+                content = '\n\n'.join([f"【回答{i+1}】\n{text}" for i, text in enumerate(content_parts)])
+            else:
+                content = '\n\n'.join(content_parts)
 
             if not title or len(content) < 50:
                 return None

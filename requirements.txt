@@ -13,3 +13,4 @@ langchain-anthropic>=0.2.0
 langchain-openai>=0.2.0
 playwright>=1.42.0
 playwright-stealth>=1.0.0
+nest-asyncio>=1.5.0
