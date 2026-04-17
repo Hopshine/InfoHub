@@ -1,4 +1,5 @@
 // AI分析页面模块
+(function() {
 let currentJobId = null;
 let sseSource = null;
 let selectedArticles = new Set();
@@ -368,6 +369,8 @@ function filterArticles() {
 }
 
 window.analysisPage = {
+    render,
+    init,
     toggleSelectAll,
     toggleArticle,
     selectAll,
@@ -377,3 +380,5 @@ window.analysisPage = {
     viewArticle,
     filterArticles
 };
+
+})();

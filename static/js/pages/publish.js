@@ -1,4 +1,5 @@
 // 发布管理页面模块
+(function() {
 let drafts = [];
 let publishedRecords = [];
 let currentTab = 'pending';
@@ -319,8 +320,12 @@ function showStatusMessage(message, type) {
 }
 
 window.publishPage = {
+    render,
+    init,
     switchTab,
     previewArticle,
     publishToWechat,
     viewPublishDetail
 };
+
+})();

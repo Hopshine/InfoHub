@@ -1,4 +1,5 @@
 // 创作中心页面模块
+(function() {
 let currentDraft = null;
 let drafts = [];
 
@@ -207,11 +208,24 @@ async function loadHotspots() {
     listElement.innerHTML = '<div class="loading">加载中...</div>';
 
     try {
-        const response = await fetch('/api/trending?limit=20');
+        const response = await fetch('/api/trending');
         const result = await response.json();
 
-        if (result.success) {
-            displayHotspots(result.data);
+        if (result.success && result.data.trending) {
+            // 将trending对象转换为数组
+            const hotspotsArray = [];
+            Object.keys(result.data.trending).forEach(platform => {
+                const items = result.data.trending[platform];
+                if (Array.isArray(items)) {
+                    items.forEach(item => {
+                        hotspotsArray.push({
+                            ...item,
+                            platform: platform
+                        });
+                    });
+                }
+            });
+            displayHotspots(hotspotsArray.slice(0, 20));
         }
     } catch (error) {
         console.error('加载热点失败:', error);
@@ -253,10 +267,10 @@ async function selectHotspot(hotspotId) {
     }
 
     try {
-        const response = await fetch('/api/generate/article', {
+        const response = await fetch('/api/generate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ hotspot_id: hotspotId })
+            body: JSON.stringify({ hotnews_ids: [hotspotId], count: 1 })
         });
 
         const result = await response.json();
@@ -392,6 +406,8 @@ function showToast(message, type = 'info') {
 }
 
 window.creationPage = {
+    render,
+    init,
     newDraft,
     loadDraft,
     saveDraft,
@@ -401,3 +417,5 @@ window.creationPage = {
     closeHotspotModal,
     togglePreview
 };
+
+})();

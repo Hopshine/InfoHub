@@ -1,4 +1,5 @@
 // 系统设置页
+(function() {
 
 let currentAccountId = null;
 
@@ -265,6 +266,7 @@ function escapeHtml(text) {
 
 // 导出公共接口
 window.settingsPage = {
+    render: initSettingsPage,
     init: initSettingsPage,
     showAccountForm,
     hideAccountForm,
@@ -272,3 +274,5 @@ window.settingsPage = {
     editAccount,
     deleteAccount
 };
+
+})();

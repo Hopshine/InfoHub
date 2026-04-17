@@ -191,8 +191,11 @@ function loadNotFoundPage() {
  * 加载热点监控模块
  */
 async function loadDashboardModule() {
-    if (typeof window.DashboardPage !== 'undefined' && typeof window.DashboardPage.init === 'function') {
-        window.DashboardPage.init();
+    if (typeof window.DashboardPage !== 'undefined' && typeof window.DashboardPage.render === 'function') {
+        AppState.mainContent.innerHTML = window.DashboardPage.render();
+        if (typeof window.DashboardPage.init === 'function') {
+            await window.DashboardPage.init();
+        }
     } else {
         AppState.mainContent.innerHTML = `
             <div class="error-container" style="text-align:center;padding:60px 20px;">
@@ -209,8 +212,11 @@ async function loadDashboardModule() {
  * 加载内容库模块
  */
 async function loadContentModule() {
-    if (typeof window.ContentPage !== 'undefined' && typeof window.ContentPage.init === 'function') {
-        window.ContentPage.init();
+    if (typeof window.ContentPage !== 'undefined' && typeof window.ContentPage.render === 'function') {
+        AppState.mainContent.innerHTML = window.ContentPage.render();
+        if (typeof window.ContentPage.init === 'function') {
+            await window.ContentPage.init();
+        }
     } else {
         AppState.mainContent.innerHTML = `
             <div class="error-container" style="text-align:center;padding:60px 20px;">
@@ -227,8 +233,11 @@ async function loadContentModule() {
  * 加载AI分析模块
  */
 async function loadAnalysisModule() {
-    if (typeof window.analysisPage !== 'undefined' && typeof window.analysisPage.init === 'function') {
-        window.analysisPage.init();
+    if (typeof window.analysisPage !== 'undefined' && typeof window.analysisPage.render === 'function') {
+        AppState.mainContent.innerHTML = window.analysisPage.render();
+        if (typeof window.analysisPage.init === 'function') {
+            await window.analysisPage.init();
+        }
     } else {
         AppState.mainContent.innerHTML = `
             <div class="error-container" style="text-align:center;padding:60px 20px;">
@@ -245,8 +254,11 @@ async function loadAnalysisModule() {
  * 加载创作中心模块
  */
 async function loadCreationModule() {
-    if (typeof window.creationPage !== 'undefined' && typeof window.creationPage.init === 'function') {
-        window.creationPage.init();
+    if (typeof window.creationPage !== 'undefined' && typeof window.creationPage.render === 'function') {
+        AppState.mainContent.innerHTML = window.creationPage.render();
+        if (typeof window.creationPage.init === 'function') {
+            await window.creationPage.init();
+        }
     } else {
         AppState.mainContent.innerHTML = `
             <div class="error-container" style="text-align:center;padding:60px 20px;">
@@ -263,8 +275,11 @@ async function loadCreationModule() {
  * 加载发布管理模块
  */
 async function loadPublishModule() {
-    if (typeof window.publishPage !== 'undefined' && typeof window.publishPage.init === 'function') {
-        window.publishPage.init();
+    if (typeof window.publishPage !== 'undefined' && typeof window.publishPage.render === 'function') {
+        AppState.mainContent.innerHTML = window.publishPage.render();
+        if (typeof window.publishPage.init === 'function') {
+            await window.publishPage.init();
+        }
     } else {
         AppState.mainContent.innerHTML = `
             <div class="error-container" style="text-align:center;padding:60px 20px;">

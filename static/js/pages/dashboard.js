@@ -61,6 +61,8 @@ const DashboardPage = (() => {
   }
 
   async function init() {
+    // 确保DOM已渲染后再加载数据
+    await new Promise(resolve => setTimeout(resolve, 0));
     await loadTrending();
   }
 
@@ -74,14 +76,19 @@ const DashboardPage = (() => {
         renderTrending();
       }
     } catch (e) {
-      document.getElementById('trending-content').innerHTML =
-        '<div class="empty-state"><div class="empty-state-title">加载失败</div><div class="empty-state-description">请刷新重试</div></div>';
+      const container = document.getElementById('trending-content');
+      if (container) {
+        container.innerHTML =
+          '<div class="empty-state"><div class="empty-state-title">加载失败</div><div class="empty-state-description">请刷新重试</div></div>';
+      }
     }
   }
 
   function updateStatus(data) {
     const lastUpdate = document.getElementById('last-update');
     const badge = document.getElementById('scheduler-status');
+
+    if (!lastUpdate || !badge) return;
 
     if (data.last_update) {
       const d = new Date(data.last_update);
@@ -101,6 +108,8 @@ const DashboardPage = (() => {
 
   function renderTrending() {
     const container = document.getElementById('trending-content');
+    if (!container) return;
+
     const platforms = currentPlatform === 'all'
       ? Object.keys(PLATFORM_NAMES)
       : [currentPlatform];
