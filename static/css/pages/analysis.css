@@ -1,0 +1,296 @@
+/* AI分析页面样式 */
+.analysis-container {
+    padding: 20px;
+}
+
+.analysis-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+}
+
+.analysis-header h2 {
+    margin: 0;
+    color: #2d3748;
+}
+
+.analysis-actions {
+    display: flex;
+    gap: 10px;
+}
+
+.analysis-filters {
+    display: flex;
+    gap: 15px;
+    margin-bottom: 20px;
+}
+
+.analysis-filters select {
+    padding: 8px 12px;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    background: white;
+    font-size: 14px;
+}
+
+/* 进度条样式 */
+.analysis-progress {
+    background: white;
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 20px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.progress-info {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 10px;
+    font-size: 14px;
+    color: #4a5568;
+}
+
+.progress-percent {
+    font-weight: 600;
+    color: #38a169;
+}
+
+.progress-bar {
+    height: 24px;
+    background: #f7fafc;
+    border-radius: 12px;
+    overflow: hidden;
+    border: 1px solid #e2e8f0;
+}
+
+.progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #38a169 0%, #48bb78 100%);
+    transition: width 0.3s ease;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    padding-right: 10px;
+    color: white;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+/* 队列表格样式 */
+.analysis-queue {
+    background: white;
+    border-radius: 8px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    overflow: hidden;
+}
+
+.analysis-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.analysis-table thead {
+    background: #f7fafc;
+    border-bottom: 2px solid #e2e8f0;
+}
+
+.analysis-table th {
+    padding: 12px 16px;
+    text-align: left;
+    font-weight: 600;
+    color: #4a5568;
+    font-size: 14px;
+}
+
+.analysis-table td {
+    padding: 12px 16px;
+    border-bottom: 1px solid #f7fafc;
+    font-size: 14px;
+}
+
+.analysis-table tbody tr:hover {
+    background: #f7fafc;
+}
+
+.article-title {
+    color: #2d3748;
+    font-weight: 500;
+    max-width: 400px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.article-checkbox {
+    cursor: pointer;
+    width: 16px;
+    height: 16px;
+}
+
+/* 来源标签 */
+.source-badge {
+    display: inline-block;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 500;
+}
+
+.source-badge.weibo {
+    background: #fff3e0;
+    color: #e65100;
+}
+
+.source-badge.zhihu {
+    background: #e3f2fd;
+    color: #1565c0;
+}
+
+.source-badge.toutiao {
+    background: #fce4ec;
+    color: #c2185b;
+}
+
+.source-badge.baidu {
+    background: #f3e5f5;
+    color: #6a1b9a;
+}
+
+/* 状态标签 */
+.status-badge {
+    display: inline-block;
+    padding: 4px 10px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 500;
+}
+
+.status-pending {
+    background: #fff3cd;
+    color: #856404;
+}
+
+.status-analyzing {
+    background: #cfe2ff;
+    color: #084298;
+}
+
+.status-completed {
+    background: #d1e7dd;
+    color: #0f5132;
+}
+
+.status-failed {
+    background: #f8d7da;
+    color: #842029;
+}
+
+/* 分析结果样式 */
+.analysis-results {
+    background: white;
+    border-radius: 8px;
+    padding: 20px;
+    margin-top: 20px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.analysis-results h3 {
+    margin: 0 0 15px 0;
+    color: #2d3748;
+    font-size: 18px;
+}
+
+.result-item {
+    padding: 15px;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    margin-bottom: 10px;
+}
+
+.result-item.success {
+    background: #f0fdf4;
+    border-color: #86efac;
+}
+
+.result-item.error {
+    background: #fef2f2;
+    border-color: #fca5a5;
+}
+
+.result-title {
+    font-weight: 600;
+    color: #2d3748;
+    margin-bottom: 5px;
+}
+
+.result-summary {
+    color: #4a5568;
+    font-size: 14px;
+    line-height: 1.6;
+}
+
+/* 空状态 */
+.empty-state {
+    text-align: center;
+    padding: 60px 20px;
+    color: #a0aec0;
+    font-size: 16px;
+}
+
+.loading {
+    text-align: center;
+    padding: 40px;
+    color: #a0aec0;
+}
+
+.error {
+    text-align: center;
+    padding: 40px;
+    color: #e53e3e;
+}
+
+/* 按钮样式 */
+.btn {
+    padding: 8px 16px;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+    transition: all 0.2s;
+}
+
+.btn-primary {
+    background: #38a169;
+    color: white;
+}
+
+.btn-primary:hover {
+    background: #2f855a;
+}
+
+.btn-success {
+    background: #48bb78;
+    color: white;
+}
+
+.btn-success:hover {
+    background: #38a169;
+}
+
+.btn-sm {
+    padding: 4px 10px;
+    font-size: 13px;
+    background: #edf2f7;
+    color: #4a5568;
+}
+
+.btn-sm:hover {
+    background: #e2e8f0;
+}
+
+.btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}

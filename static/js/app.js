@@ -1,1281 +1,447 @@
-// 全局变量
-let currentPage = 1;
-let allArticles = [];
-let statsData = {};
-let currentJobId = null;
-let sseSource = null;
-let selectedArticles = new Set();
+// SPA路由系统
 
-// 页面加载时初始化
-document.addEventListener('DOMContentLoaded', function() {
-    loadStats();
-    loadArticles();
-    loadSidebarTrending();
-});
+/**
+ * InfoHub SPA应用主入口
+ * 负责路由管理、页面切换、导航高亮
+ */
 
-// 加载统计信息
-async function loadStats() {
-    try {
-        const response = await fetch('/api/stats');
-        const result = await response.json();
+// ==================== 全局状态 ====================
 
-        if (result.success) {
-            statsData = result.data;
-            updateStatsDisplay();
-            updateCategoryFilter();
-        }
-    } catch (error) {
-        console.error('加载统计信息失败:', error);
+const AppState = {
+    currentRoute: null,
+    currentModule: null,
+    loadingElement: null,
+    mainContent: null
+};
+
+// ==================== 路由配置 ====================
+
+const Routes = {
+    '/dashboard': {
+        name: '热点监控',
+        module: 'dashboard',
+        loader: () => loadDashboardModule()
+    },
+    '/content': {
+        name: '内容库',
+        module: 'content',
+        loader: () => loadContentModule()
+    },
+    '/analysis': {
+        name: 'AI分析',
+        module: 'analysis',
+        loader: () => loadAnalysisModule()
+    },
+    '/creation': {
+        name: '创作中心',
+        module: 'creation',
+        loader: () => loadCreationModule()
+    },
+    '/publish': {
+        name: '发布管理',
+        module: 'publish',
+        loader: () => loadPublishModule()
+    },
+    '/settings': {
+        name: '系统设置',
+        module: 'settings',
+        loader: () => loadSettingsModule()
     }
+};
+
+// ==================== 应用初始化 ====================
+
+/**
+ * 应用初始化
+ */
+function initApp() {
+    AppState.loadingElement = document.getElementById('loading-container');
+    AppState.mainContent = document.getElementById('main-content');
+
+    // 监听hash变化
+    window.addEventListener('hashchange', handleRouteChange);
+
+    // 监听导航点击
+    document.querySelectorAll('.nav-item').forEach(item => {
+        item.addEventListener('click', handleNavClick);
+    });
+
+    // 初始路由
+    const hash = window.location.hash || '#/dashboard';
+    window.location.hash = hash;
+    handleRouteChange();
 }
 
-// 更新统计显示
-function updateStatsDisplay() {
-    document.getElementById('total-articles').textContent = statsData.total || 0;
-    document.getElementById('analyzed-articles').textContent = statsData.analyzed || 0;
-    document.getElementById('pending-articles').textContent = statsData.pending || 0;
-    document.getElementById('categories-count').textContent =
-        Object.keys(statsData.categories || {}).length;
-}
+/**
+ * 处理路由变化
+ */
+function handleRouteChange() {
+    const hash = window.location.hash.slice(1) || '/dashboard';
+    const route = Routes[hash];
 
-// 更新分类过滤器
-function updateCategoryFilter() {
-    const select = document.getElementById('category-filter');
-    select.innerHTML = '<option value="">全部分类</option>';
-
-    if (statsData.categories) {
-        Object.keys(statsData.categories).forEach(category => {
-            const option = document.createElement('option');
-            option.value = category;
-            option.textContent = `${category} (${statsData.categories[category]})`;
-            select.appendChild(option);
-        });
-    }
-}
-
-// 加载文章列表
-async function loadArticles(page = 1) {
-    const listElement = document.getElementById('articles-list');
-    listElement.innerHTML = '<div class="loading">加载中...</div>';
-
-    try {
-        const response = await fetch(`/api/articles?page=${page}&limit=20`);
-        const result = await response.json();
-
-        if (result.success) {
-            allArticles = result.data.articles;
-            currentPage = page;
-            displayArticles(allArticles);
-            updatePagination(result.data);
-        }
-    } catch (error) {
-        console.error('加载文章失败:', error);
-        listElement.innerHTML = '<div class="loading">加载失败，请重试</div>';
-    }
-}
-
-// 来源平台映射
-function getSourceInfo(article) {
-    const source = (article.source || '').toLowerCase();
-    const account = (article.account_name || '').toLowerCase();
-    if (source === 'wechat' || account.includes('微信')) return { label: '微信', cls: 'source-wechat' };
-    if (source === 'weibo' || account === '微博') return { label: '微博', cls: 'source-weibo' };
-    if (source === 'zhihu' || account === '知乎') return { label: '知乎', cls: 'source-zhihu' };
-    if (source === 'baidu' || account.includes('百度')) return { label: '百度', cls: 'source-baidu' };
-    if (source === 'douyin' || account.includes('抖音')) return { label: '抖音', cls: 'source-douyin' };
-    if (source && source !== 'manual') return { label: source, cls: 'source-default' };
-    return null;
-}
-
-// 格式化时间
-function formatTime(timeStr) {
-    if (!timeStr) return '';
-    try {
-        const d = new Date(timeStr);
-        if (isNaN(d.getTime())) return timeStr;
-        const now = new Date();
-        const diff = now - d;
-        if (diff < 3600000) return Math.max(1, Math.floor(diff / 60000)) + '分钟前';
-        if (diff < 86400000) return Math.floor(diff / 3600000) + '小时前';
-        if (diff < 604800000) return Math.floor(diff / 86400000) + '天前';
-        return (d.getMonth() + 1) + '月' + d.getDate() + '日';
-    } catch (e) { return timeStr; }
-}
-
-// 截取内容预览
-function getPreview(content, maxLen) {
-    if (!content) return '';
-    const text = content.replace(/\n+/g, ' ').replace(/\s+/g, ' ').trim();
-    return text.length > maxLen ? text.substring(0, maxLen) + '...' : text;
-}
-
-// 显示文章列表
-function displayArticles(articles) {
-    const listElement = document.getElementById('articles-list');
-
-    if (articles.length === 0) {
-        listElement.innerHTML = '<div class="loading">暂无文章</div>';
+    if (!route) {
+        console.error('未找到路由:', hash);
+        loadNotFoundPage();
         return;
     }
 
-    listElement.innerHTML = articles.map(article => {
-        const sourceInfo = getSourceInfo(article);
-        const preview = !article.summary ? getPreview(article.content, 120) : '';
-        const time = formatTime(article.created_at || article.publish_time);
+    AppState.currentRoute = hash;
+    updateNavigation(hash);
+    loadPage(route);
+}
 
-        return `
-        <div class="article-item">
-            <div class="article-checkbox">
-                <input type="checkbox"
-                       class="article-select-checkbox"
-                       data-article-id="${article.id}"
-                       onchange="toggleArticleSelection(${article.id})"
-                       ${selectedArticles.has(article.id) ? 'checked' : ''}>
+/**
+ * 处理导航点击
+ */
+function handleNavClick(event) {
+    const navItem = event.currentTarget;
+    const href = navItem.getAttribute('href');
+
+    if (href && href.startsWith('#/')) {
+        document.querySelectorAll('.nav-item').forEach(item => {
+            item.classList.remove('active');
+        });
+        navItem.classList.add('active');
+    }
+}
+
+/**
+ * 更新导航高亮
+ */
+function updateNavigation(route) {
+    document.querySelectorAll('.nav-item').forEach(item => {
+        const href = item.getAttribute('href');
+        if (href === `#${route}`) {
+            item.classList.add('active');
+        } else {
+            item.classList.remove('active');
+        }
+    });
+}
+
+/**
+ * 加载页面
+ */
+async function loadPage(route) {
+    try {
+        showLoading();
+        await route.loader();
+        hideLoading();
+    } catch (error) {
+        console.error('加载页面失败:', error);
+        showError('页面加载失败，请刷新重试');
+    }
+}
+
+/**
+ * 显示加载状态
+ */
+function showLoading() {
+    if (AppState.loadingElement) {
+        AppState.loadingElement.style.display = 'flex';
+    }
+}
+
+/**
+ * 隐藏加载状态
+ */
+function hideLoading() {
+    if (AppState.loadingElement) {
+        AppState.loadingElement.style.display = 'none';
+    }
+}
+
+/**
+ * 显示错误信息
+ */
+function showError(message) {
+    if (AppState.mainContent) {
+        AppState.mainContent.innerHTML = `
+            <div class="error-container" style="text-align:center;padding:60px 20px;">
+                <div style="font-size:48px;margin-bottom:20px;">⚠️</div>
+                <h2 style="color:#ff4d4f;margin-bottom:12px;">加载失败</h2>
+                <p style="color:#8c8c8c;margin-bottom:24px;">${escapeHtml(message)}</p>
+                <button class="btn btn-primary" onclick="location.reload()">刷新页面</button>
             </div>
-            <div class="article-content" onclick="showArticleDetail(${article.id})">
-                <div class="article-header">
-                    <div class="article-title">${escapeHtml(article.title)}</div>
-                    <div class="article-badges">
-                        ${sourceInfo ? `<span class="source-badge ${sourceInfo.cls}">${sourceInfo.label}</span>` : ''}
-                        <span class="article-status ${article.analysis ? 'status-analyzed' : 'status-pending'}">
-                            ${article.analysis ? '已分析' : '待分析'}
-                        </span>
-                    </div>
-                </div>
-                <div class="article-meta">
-                    ${article.account_name ? `<span>${escapeHtml(article.account_name)}</span>` : ''}
-                    ${time ? `<span>${time}</span>` : ''}
-                    ${article.category ? `<span class="tag category">${escapeHtml(article.category)}</span>` : ''}
-                </div>
-                ${preview ? `<div class="article-preview">${escapeHtml(preview)}</div>` : ''}
-                ${article.summary ? `<div class="article-summary">${escapeHtml(article.summary)}</div>` : ''}
-                ${article.keywords ? `
-                    <div class="article-tags">
-                        ${article.keywords.split(',').slice(0, 5).map(k =>
-                            `<span class="tag">${escapeHtml(k.trim())}</span>`
-                        ).join('')}
-                    </div>
-                ` : ''}
+        `;
+    }
+    hideLoading();
+}
+
+/**
+ * 404页面
+ */
+function loadNotFoundPage() {
+    if (AppState.mainContent) {
+        AppState.mainContent.innerHTML = `
+            <div class="error-container" style="text-align:center;padding:60px 20px;">
+                <div style="font-size:48px;margin-bottom:20px;">🔍</div>
+                <h2 style="color:#8c8c8c;margin-bottom:12px;">页面未找到</h2>
+                <p style="color:#8c8c8c;margin-bottom:24px;">您访问的页面不存在</p>
+                <button class="btn btn-primary" onclick="window.location.hash='#/dashboard'">返回首页</button>
             </div>
-        </div>`;
-    }).join('');
-
-    updateBulkActionsBar();
+        `;
+    }
+    hideLoading();
 }
 
-// 更新分页信息
-function updatePagination(data) {
-    const totalPages = Math.ceil(data.total / data.limit) || 1;
-    document.getElementById('page-info').textContent = `第 ${data.page}/${totalPages} 页 (共${data.total}篇)`;
+// ==================== 页面模块加载器 ====================
+
+/**
+ * 加载热点监控模块
+ */
+async function loadDashboardModule() {
+    if (typeof window.DashboardPage !== 'undefined' && typeof window.DashboardPage.init === 'function') {
+        window.DashboardPage.init();
+    } else {
+        AppState.mainContent.innerHTML = `
+            <div class="error-container" style="text-align:center;padding:60px 20px;">
+                <div style="font-size:48px;margin-bottom:20px;">⚠️</div>
+                <h2 style="color:#ff4d4f;margin-bottom:12px;">模块加载失败</h2>
+                <p style="color:#8c8c8c;margin-bottom:24px;">热点监控模块未正确加载</p>
+                <button class="btn btn-primary" onclick="location.reload()">刷新页面</button>
+            </div>
+        `;
+    }
 }
 
-// 过滤文章
-function filterArticles() {
-    const searchText = document.getElementById('search-input').value.toLowerCase();
-    const category = document.getElementById('category-filter').value;
+/**
+ * 加载内容库模块
+ */
+async function loadContentModule() {
+    if (typeof window.ContentPage !== 'undefined' && typeof window.ContentPage.init === 'function') {
+        window.ContentPage.init();
+    } else {
+        AppState.mainContent.innerHTML = `
+            <div class="error-container" style="text-align:center;padding:60px 20px;">
+                <div style="font-size:48px;margin-bottom:20px;">⚠️</div>
+                <h2 style="color:#ff4d4f;margin-bottom:12px;">模块加载失败</h2>
+                <p style="color:#8c8c8c;margin-bottom:24px;">内容库模块未正确加载</p>
+                <button class="btn btn-primary" onclick="location.reload()">刷新页面</button>
+            </div>
+        `;
+    }
+}
 
-    const filtered = allArticles.filter(article => {
-        const matchSearch = !searchText ||
-            article.title.toLowerCase().includes(searchText) ||
-            (article.summary && article.summary.toLowerCase().includes(searchText));
+/**
+ * 加载AI分析模块
+ */
+async function loadAnalysisModule() {
+    if (typeof window.analysisPage !== 'undefined' && typeof window.analysisPage.init === 'function') {
+        window.analysisPage.init();
+    } else {
+        AppState.mainContent.innerHTML = `
+            <div class="error-container" style="text-align:center;padding:60px 20px;">
+                <div style="font-size:48px;margin-bottom:20px;">⚠️</div>
+                <h2 style="color:#ff4d4f;margin-bottom:12px;">模块加载失败</h2>
+                <p style="color:#8c8c8c;margin-bottom:24px;">AI分析模块未正确加载</p>
+                <button class="btn btn-primary" onclick="location.reload()">刷新页面</button>
+            </div>
+        `;
+    }
+}
 
-        const matchCategory = !category || article.category === category;
+/**
+ * 加载创作中心模块
+ */
+async function loadCreationModule() {
+    if (typeof window.creationPage !== 'undefined' && typeof window.creationPage.init === 'function') {
+        window.creationPage.init();
+    } else {
+        AppState.mainContent.innerHTML = `
+            <div class="error-container" style="text-align:center;padding:60px 20px;">
+                <div style="font-size:48px;margin-bottom:20px;">⚠️</div>
+                <h2 style="color:#ff4d4f;margin-bottom:12px;">模块加载失败</h2>
+                <p style="color:#8c8c8c;margin-bottom:24px;">创作中心模块未正确加载</p>
+                <button class="btn btn-primary" onclick="location.reload()">刷新页面</button>
+            </div>
+        `;
+    }
+}
 
-        return matchSearch && matchCategory;
+/**
+ * 加载发布管理模块
+ */
+async function loadPublishModule() {
+    if (typeof window.publishPage !== 'undefined' && typeof window.publishPage.init === 'function') {
+        window.publishPage.init();
+    } else {
+        AppState.mainContent.innerHTML = `
+            <div class="error-container" style="text-align:center;padding:60px 20px;">
+                <div style="font-size:48px;margin-bottom:20px;">⚠️</div>
+                <h2 style="color:#ff4d4f;margin-bottom:12px;">模块加载失败</h2>
+                <p style="color:#8c8c8c;margin-bottom:24px;">发布管理模块未正确加载</p>
+                <button class="btn btn-primary" onclick="location.reload()">刷新页面</button>
+            </div>
+        `;
+    }
+}
+
+/**
+ * 加载系统设置模块
+ */
+async function loadSettingsModule() {
+    if (typeof window.settingsPage !== 'undefined' && typeof window.settingsPage.init === 'function') {
+        window.settingsPage.init();
+    } else {
+        AppState.mainContent.innerHTML = `
+            <div class="error-container" style="text-align:center;padding:60px 20px;">
+                <div style="font-size:48px;margin-bottom:20px;">⚠️</div>
+                <h2 style="color:#ff4d4f;margin-bottom:12px;">模块加载失败</h2>
+                <p style="color:#8c8c8c;margin-bottom:24px;">系统设置模块未正确加载</p>
+                <button class="btn btn-primary" onclick="location.reload()">刷新页面</button>
+            </div>
+        `;
+    }
+}
+
+// ==================== 辅助函数 ====================
+
+/**
+ * 动态加载JS脚本
+ */
+function loadScript(src) {
+    return new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = src;
+        script.onload = resolve;
+        script.onerror = reject;
+        document.head.appendChild(script);
     });
-
-    displayArticles(filtered);
 }
 
-// 显示文章详情
-async function showArticleDetail(articleId) {
+/**
+ * 加载文章数据
+ */
+async function loadArticlesData() {
     try {
-        const response = await fetch(`/api/article/${articleId}`);
-        const result = await response.json();
-
-        if (result.success) {
-            const article = result.data;
-            const sourceInfo = getSourceInfo(article);
-            const time = formatTime(article.created_at || article.publish_time);
-
-            const detailHtml = `
-                <div class="detail-title">${escapeHtml(article.title)}</div>
-
-                <div class="detail-meta">
-                    ${article.account_name ? `<span class="detail-meta-item"><strong>来源</strong> ${escapeHtml(article.account_name)}</span>` : ''}
-                    ${sourceInfo ? `<span class="detail-meta-item"><span class="source-badge ${sourceInfo.cls}">${sourceInfo.label}</span></span>` : ''}
-                    ${article.author ? `<span class="detail-meta-item"><strong>作者</strong> ${escapeHtml(article.author)}</span>` : ''}
-                    ${time ? `<span class="detail-meta-item"><strong>时间</strong> ${time}</span>` : ''}
-                    ${article.category ? `<span class="detail-meta-item"><span class="tag category">${escapeHtml(article.category)}</span></span>` : ''}
-                </div>
-
-                ${article.keywords ? `
-                    <div class="detail-keywords">
-                        ${article.keywords.split(',').map(k =>
-                            `<span class="tag">${escapeHtml(k.trim())}</span>`
-                        ).join('')}
-                    </div>
-                ` : ''}
-
-                ${article.summary ? `
-                    <div class="detail-section">
-                        <div class="detail-section-header">摘要</div>
-                        <div class="detail-summary-box">${escapeHtml(article.summary)}</div>
-                    </div>
-                ` : ''}
-
-                ${article.analysis ? `
-                    <div class="detail-section">
-                        <div class="detail-section-header">深度分析</div>
-                        <div class="markdown-body">${renderMarkdown(article.analysis)}</div>
-                    </div>
-                ` : ''}
-
-                ${article.content ? `
-                    <div class="detail-section">
-                        <div class="detail-section-header">文章内容</div>
-                        <div class="detail-content-body">${escapeHtml(article.content.substring(0, 2000))}${article.content.length > 2000 ? '\n\n...(内容已截断)' : ''}</div>
-                    </div>
-                ` : ''}
-
-                <div class="detail-actions">
-                    ${!article.analysis ? `
-                        <button class="btn btn-success" onclick="analyzeArticle(${article.id})">
-                            立即分析
-                        </button>
-                    ` : ''}
-                    <button class="btn btn-danger" onclick="deleteArticle(${article.id})">
-                        删除文章
-                    </button>
-                    ${article.url ? `
-                        <a href="${article.url}" target="_blank" class="btn btn-info" style="text-decoration:none;">
-                            查看原文
-                        </a>
-                    ` : ''}
-                </div>
-            `;
-
-            document.getElementById('article-detail').innerHTML = detailHtml;
-            document.getElementById('article-modal').style.display = 'block';
-        }
-    } catch (error) {
-        console.error('加载文章详情失败:', error);
-        alert('加载失败，请重试');
-    }
-}
-
-// 关闭模态框
-function closeModal() {
-    document.getElementById('article-modal').style.display = 'none';
-}
-
-// 分析单篇文章
-async function analyzeArticle(articleId) {
-    if (!confirm('确定要分析这篇文章吗？这将调用LLM API。')) {
-        return;
-    }
-
-    const btn = event.target;
-    btn.disabled = true;
-    btn.textContent = '分析中...';
-
-    try {
-        const response = await fetch(`/api/analyze/${articleId}`, {
-            method: 'POST'
-        });
-        const result = await response.json();
-
-        if (result.success) {
-            alert('分析完成！');
-            closeModal();
-            refreshData();
-        } else {
-            alert('分析失败: ' + result.error);
-        }
-    } catch (error) {
-        console.error('分析失败:', error);
-        alert('分析失败，请重试');
-    } finally {
-        btn.disabled = false;
-        btn.textContent = '🤖 立即分析';
-    }
-}
-
-// 批量分析
-async function analyzeBatch() {
-    const limit = prompt('请输入要分析的文章数量（建议不超过10篇）:', '5');
-
-    if (!limit || isNaN(limit) || limit <= 0) {
-        return;
-    }
-
-    if (!confirm(`确定要分析 ${limit} 篇文章吗？这将调用LLM API。`)) {
-        return;
-    }
-
-    const btn = event.target;
-    btn.disabled = true;
-    btn.textContent = '分析中...';
-
-    try {
-        const response = await fetch('/api/analyze/batch', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ limit: parseInt(limit) })
-        });
-        const result = await response.json();
-
-        if (result.success) {
-            const success = result.data.filter(r => r.success).length;
-            const failed = result.data.filter(r => !r.success).length;
-            alert(`批量分析完成！\n成功: ${success} 篇\n失败: ${failed} 篇`);
-            refreshData();
-        } else {
-            alert('批量分析失败: ' + result.error);
-        }
-    } catch (error) {
-        console.error('批量分析失败:', error);
-        alert('批量分析失败，请重试');
-    } finally {
-        btn.disabled = false;
-        btn.textContent = '🤖 批量分析';
-    }
-}
-
-// 显示分类统计
-function showCategories() {
-    if (!statsData.categories || Object.keys(statsData.categories).length === 0) {
-        alert('暂无分类数据');
-        return;
-    }
-
-    const maxCount = Math.max(...Object.values(statsData.categories));
-    const chartHtml = Object.entries(statsData.categories)
-        .sort((a, b) => b[1] - a[1])
-        .map(([category, count]) => {
-            const width = (count / maxCount) * 100;
-            return `
-                <div class="category-item">
-                    <div class="category-name">${escapeHtml(category)}</div>
-                    <div class="category-bar" style="width: ${width}%"></div>
-                    <div class="category-count">${count}</div>
-                </div>
-            `;
-        }).join('');
-
-    document.getElementById('categories-chart').innerHTML = chartHtml;
-    document.getElementById('categories-modal').style.display = 'block';
-}
-
-// 关闭分类统计模态框
-function closeCategoriesModal() {
-    document.getElementById('categories-modal').style.display = 'none';
-}
-
-// 刷新数据
-function refreshData() {
-    loadStats();
-    loadArticles(currentPage);
-}
-
-// 上一页
-function prevPage() {
-    if (currentPage > 1) {
-        loadArticles(currentPage - 1);
-    }
-}
-
-// 下一页
-function nextPage() {
-    loadArticles(currentPage + 1);
-}
-
-// HTML转义
-function escapeHtml(text) {
-    if (!text) return '';
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-}
-
-// 点击模态框外部关闭
-window.onclick = function(event) {
-    const articleModal = document.getElementById('article-modal');
-    const categoriesModal = document.getElementById('categories-modal');
-    const collectModal = document.getElementById('collect-modal');
-
-    if (event.target === articleModal) {
-        closeModal();
-    }
-    if (event.target === categoriesModal) {
-        closeCategoriesModal();
-    }
-    if (event.target === collectModal) {
-        closeCollectModal();
-    }
-}
-
-// ==================== 采集功能 ====================
-
-// 显示采集模态框
-function showCollectModal() {
-    document.getElementById('collect-modal').style.display = 'block';
-    document.getElementById('collect-result').innerHTML = '';
-    document.getElementById('collect-result').className = 'collect-result';
-    // 重置进度
-    const progressDiv = document.getElementById('crawl-progress');
-    progressDiv.style.display = 'none';
-    document.getElementById('cancel-crawl-btn').style.display = '';
-    document.getElementById('progress-step').style.color = '';
-}
-
-// 关闭采集模态框
-function closeCollectModal() {
-    document.getElementById('collect-modal').style.display = 'none';
-    // 关闭SSE连接
-    if (sseSource) {
-        sseSource.close();
-        sseSource = null;
-    }
-}
-
-// 切换采集标签页
-function switchCollectTab(tab) {
-    // 隐藏所有标签页
-    document.querySelectorAll('.collect-tab-content').forEach(el => {
-        el.classList.remove('active');
-    });
-    document.querySelectorAll('.tab-btn').forEach(el => {
-        el.classList.remove('active');
-    });
-
-    // 显示选中的标签页
-    if (tab === 'url') {
-        document.getElementById('collect-url-tab').classList.add('active');
-        document.querySelectorAll('.tab-btn')[0].classList.add('active');
-    } else if (tab === 'batch') {
-        document.getElementById('collect-batch-tab').classList.add('active');
-        document.querySelectorAll('.tab-btn')[1].classList.add('active');
-    } else if (tab === 'search') {
-        document.getElementById('collect-search-tab').classList.add('active');
-        document.querySelectorAll('.tab-btn')[2].classList.add('active');
-    }
-
-    // 清空结果
-    document.getElementById('collect-result').innerHTML = '';
-}
-
-// 采集单个URL（使用新爬虫引擎）
-async function collectSingleUrl() {
-    const url = document.getElementById('single-url-input').value.trim();
-
-    if (!url) {
-        showCollectResult('请输入URL', 'error');
-        return;
-    }
-
-    if (!url.startsWith('http')) {
-        showCollectResult('请输入有效的URL', 'error');
-        return;
-    }
-
-    startCrawlJob('single_url', { url: url });
-}
-
-// 批量采集URL（使用新爬虫引擎）
-async function collectBatchUrls() {
-    const textarea = document.getElementById('batch-urls-input');
-    const urls = textarea.value.split('\n')
-        .map(line => line.trim())
-        .filter(line => line && line.startsWith('http'));
-
-    if (urls.length === 0) {
-        showCollectResult('请输入至少一个URL', 'error');
-        return;
-    }
-
-    startCrawlJob('batch_url', { urls: urls });
-}
-
-// 搜索并采集（使用新爬虫引擎）
-async function collectFromSearch() {
-    const keyword = document.getElementById('search-keyword-input').value.trim();
-    const maxResults = parseInt(document.getElementById('search-max-input').value) || 5;
-
-    if (!keyword) {
-        showCollectResult('请输入搜索关键词', 'error');
-        return;
-    }
-
-    startCrawlJob('search', { keyword: keyword, max_results: maxResults });
-}
-
-// 显示采集结果
-function showCollectResult(message, type) {
-    const resultDiv = document.getElementById('collect-result');
-    resultDiv.innerHTML = `<p>${message}</p>`;
-    resultDiv.className = `collect-result ${type}`;
-}
-
-// ==================== 爬虫任务管理 ====================
-
-// 启动采集任务
-async function startCrawlJob(jobType, params) {
-    const resultDiv = document.getElementById('collect-result');
-    const progressDiv = document.getElementById('crawl-progress');
-
-    resultDiv.innerHTML = '';
-    resultDiv.className = 'collect-result';
-    progressDiv.style.display = 'block';
-    document.getElementById('progress-step').textContent = '提交任务中...';
-    document.getElementById('progress-count').textContent = '0/0';
-    document.getElementById('progress-bar').style.width = '0%';
-    document.getElementById('progress-items').innerHTML = '';
-
-    try {
-        const response = await fetch('/api/crawl/start', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ job_type: jobType, ...params })
-        });
-
-        const result = await response.json();
-
-        if (result.success) {
-            currentJobId = result.data.job_id;
-            startSSE(currentJobId);
-        } else {
-            progressDiv.style.display = 'none';
-            showCollectResult('任务提交失败: ' + result.error, 'error');
-        }
-    } catch (error) {
-        progressDiv.style.display = 'none';
-        showCollectResult('任务提交失败: ' + error.message, 'error');
-    }
-}
-
-// 启动SSE实时进度
-function startSSE(jobId) {
-    if (sseSource) {
-        sseSource.close();
-    }
-
-    sseSource = new EventSource('/api/crawl/stream/' + jobId);
-
-    sseSource.onmessage = function(event) {
-        try {
-            const data = JSON.parse(event.data);
-            updateProgress(data);
-
-            if (data.status === 'completed' || data.status === 'failed' || data.status === 'cancelled') {
-                sseSource.close();
-                sseSource = null;
-                onCrawlComplete(data);
-            }
-        } catch (e) {
-            console.error('SSE解析错误:', e);
-        }
-    };
-
-    sseSource.onerror = function() {
-        sseSource.close();
-        sseSource = null;
-        // 降级为轮询
-        pollProgress(jobId);
-    };
-}
-
-// 轮询进度（SSE失败时的降级方案）
-async function pollProgress(jobId) {
-    const poll = async () => {
-        try {
-            const response = await fetch('/api/crawl/progress/' + jobId);
-            const result = await response.json();
-
-            if (result.success) {
-                updateProgress(result.data);
-                const status = result.data.status;
-                if (status === 'completed' || status === 'failed' || status === 'cancelled') {
-                    onCrawlComplete(result.data);
-                    return;
-                }
-            }
-        } catch (e) {
-            console.error('轮询错误:', e);
-        }
-        setTimeout(poll, 1000);
-    };
-    poll();
-}
-
-// 更新进度UI
-function updateProgress(data) {
-    const stepEl = document.getElementById('progress-step');
-    const countEl = document.getElementById('progress-count');
-    const barEl = document.getElementById('progress-bar');
-    const itemsEl = document.getElementById('progress-items');
-
-    if (data.current_step) {
-        stepEl.textContent = data.current_step;
-    }
-
-    if (data.total > 0) {
-        countEl.textContent = data.completed + '/' + data.total;
-        const pct = data.progress_pct || Math.round(data.completed / data.total * 100);
-        barEl.style.width = pct + '%';
-    }
-
-    // 显示最新的结果项
-    if (data.items && data.items.length > 0) {
-        itemsEl.innerHTML = data.items.map(item => {
-            if (item.success) {
-                return '<div class="progress-item success">✓ ' + escapeHtml(item.title) + '</div>';
-            } else {
-                return '<div class="progress-item error">✗ ' + escapeHtml(item.title) +
-                       (item.error ? ' (' + escapeHtml(item.error) + ')' : '') + '</div>';
-            }
-        }).join('');
-        // 滚动到底部
-        itemsEl.scrollTop = itemsEl.scrollHeight;
-    }
-}
-
-// 采集完成回调
-function onCrawlComplete(data) {
-    const progressDiv = document.getElementById('crawl-progress');
-    const cancelBtn = document.getElementById('cancel-crawl-btn');
-    cancelBtn.style.display = 'none';
-
-    const stepEl = document.getElementById('progress-step');
-    if (data.status === 'completed') {
-        stepEl.textContent = '采集完成';
-        stepEl.style.color = '#48bb78';
-    } else if (data.status === 'cancelled') {
-        stepEl.textContent = '已取消';
-        stepEl.style.color = '#ed8936';
-    } else {
-        stepEl.textContent = '采集失败';
-        stepEl.style.color = '#e53e3e';
-    }
-
-    // 显示汇总
-    const resultDiv = document.getElementById('collect-result');
-    resultDiv.innerHTML = '<p>成功: ' + (data.succeeded || 0) +
-                          ' | 失败: ' + (data.failed || 0) +
-                          ' | 跳过: ' + ((data.completed || 0) - (data.succeeded || 0) - (data.failed || 0)) + '</p>';
-    resultDiv.className = 'collect-result ' + (data.succeeded > 0 ? 'success' : 'error');
-
-    currentJobId = null;
-    setTimeout(() => refreshData(), 1000);
-}
-
-// 取消采集
-async function cancelCrawl() {
-    if (!currentJobId) return;
-
-    try {
-        const response = await fetch('/api/crawl/cancel/' + currentJobId, {
-            method: 'POST'
-        });
-        const result = await response.json();
-        if (!result.success) {
-            console.error('取消失败:', result.error);
-        }
-    } catch (error) {
-        console.error('取消失败:', error);
-    }
-}
-
-// ==================== 多选与批量操作 ====================
-
-// 切换文章选择
-function toggleArticleSelection(articleId) {
-    if (selectedArticles.has(articleId)) {
-        selectedArticles.delete(articleId);
-    } else {
-        selectedArticles.add(articleId);
-    }
-    updateBulkActionsBar();
-    updateSelectAllCheckbox();
-}
-
-// 全选/取消全选
-function toggleSelectAll() {
-    const checkbox = document.getElementById('select-all-checkbox');
-    const checkboxes = document.querySelectorAll('.article-select-checkbox');
-
-    if (checkbox.checked) {
-        checkboxes.forEach(cb => {
-            const articleId = parseInt(cb.dataset.articleId);
-            selectedArticles.add(articleId);
-            cb.checked = true;
-        });
-    } else {
-        selectedArticles.clear();
-        checkboxes.forEach(cb => cb.checked = false);
-    }
-
-    updateBulkActionsBar();
-}
-
-// 更新全选复选框状态
-function updateSelectAllCheckbox() {
-    const checkbox = document.getElementById('select-all-checkbox');
-    const checkboxes = document.querySelectorAll('.article-select-checkbox');
-    const allChecked = checkboxes.length > 0 && Array.from(checkboxes).every(cb => cb.checked);
-    checkbox.checked = allChecked;
-}
-
-// 更新批量操作栏
-function updateBulkActionsBar() {
-    const bar = document.getElementById('bulk-actions-bar');
-    const count = document.getElementById('selected-count');
-
-    if (selectedArticles.size > 0) {
-        bar.style.display = 'block';
-        count.textContent = `已选择 ${selectedArticles.size} 篇文章`;
-    } else {
-        bar.style.display = 'none';
-    }
-}
-
-// 清除选择
-function clearSelection() {
-    selectedArticles.clear();
-    document.querySelectorAll('.article-select-checkbox').forEach(cb => cb.checked = false);
-    document.getElementById('select-all-checkbox').checked = false;
-    updateBulkActionsBar();
-}
-
-// 批量删除
-async function bulkDelete() {
-    if (selectedArticles.size === 0) {
-        alert('请先选择要删除的文章');
-        return;
-    }
-
-    if (!confirm(`确定要删除选中的 ${selectedArticles.size} 篇文章吗？此操作不可恢复。`)) {
-        return;
-    }
-
-    try {
-        const response = await fetch('/api/articles/delete', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ article_ids: Array.from(selectedArticles) })
-        });
-
-        const result = await response.json();
-
-        if (result.success) {
-            alert(`成功删除 ${result.data.deleted_count} 篇文章`);
-            clearSelection();
-            refreshData();
-        } else {
-            alert('删除失败: ' + result.error);
-        }
-    } catch (error) {
-        console.error('删除失败:', error);
-        alert('删除失败，请重试');
-    }
-}
-
-// 批量分析选中文章
-async function bulkAnalyze() {
-    if (selectedArticles.size === 0) {
-        alert('请先选择要分析的文章');
-        return;
-    }
-
-    if (!confirm(`确定要分析选中的 ${selectedArticles.size} 篇文章吗？这将调用LLM API。`)) {
-        return;
-    }
-
-    const articleIds = Array.from(selectedArticles);
-    let successCount = 0;
-    let failCount = 0;
-
-    for (const articleId of articleIds) {
-        try {
-            const response = await fetch(`/api/analyze/${articleId}`, {
-                method: 'POST'
+        const [statsResult, articlesResult] = await Promise.all([
+            API.stats.get(),
+            API.articles.list(1, 20)
+        ]);
+
+        if (statsResult.success) {
+            document.getElementById('total-articles').textContent = statsResult.data.total || 0;
+            document.getElementById('analyzed-articles').textContent = statsResult.data.analyzed || 0;
+            document.getElementById('pending-articles').textContent = statsResult.data.pending || 0;
+            document.getElementById('categories-count').textContent = Object.keys(statsResult.data.categories || {}).length;
+
+            // 更新分类过滤器
+            const categoryFilter = document.getElementById('category-filter');
+            categoryFilter.innerHTML = '<option value="">全部分类</option>';
+            Object.entries(statsResult.data.categories || {}).forEach(([cat, count]) => {
+                categoryFilter.innerHTML += `<option value="${escapeHtml(cat)}">${escapeHtml(cat)} (${count})</option>`;
             });
-            const result = await response.json();
-
-            if (result.success) {
-                successCount++;
-            } else {
-                failCount++;
-            }
-        } catch (error) {
-            console.error(`分析文章 ${articleId} 失败:`, error);
-            failCount++;
         }
-    }
 
-    alert(`批量分析完成！\n成功: ${successCount} 篇\n失败: ${failCount} 篇`);
-    clearSelection();
-    refreshData();
-}
-
-// 删除单篇文章
-async function deleteArticle(articleId) {
-    if (!confirm('确定要删除这篇文章吗？此操作不可恢复。')) {
-        return;
-    }
-
-    try {
-        const response = await fetch(`/api/article/${articleId}`, {
-            method: 'DELETE'
-        });
-        const result = await response.json();
-
-        if (result.success) {
-            alert('删除成功');
-            closeModal();
-            refreshData();
-        } else {
-            alert('删除失败: ' + result.error);
+        if (articlesResult.success) {
+            renderArticlesList(articlesResult.data.articles);
         }
     } catch (error) {
-        console.error('删除失败:', error);
-        alert('删除失败，请重试');
+        console.error('加载文章数据失败:', error);
+        showToast('加载数据失败', 'error');
     }
 }
 
-// 渲染Markdown
-function renderMarkdown(text) {
-    if (!text) return '';
-    if (typeof marked === 'undefined' || typeof DOMPurify === 'undefined') {
-        return escapeHtml(text);
-    }
-    const html = marked.parse(text);
-    return DOMPurify.sanitize(html);
-}
-
-// ==================== 首页热点侧边栏 ====================
-
-let sidebarTrendingData = {};
-let currentSidebarPlatform = 'weibo';
-
-async function loadSidebarTrending() {
-    try {
-        const resp = await fetch('/api/trending');
-        const data = await resp.json();
-        if (data.success) {
-            sidebarTrendingData = data.data.trending || {};
-            renderSidebarTrending();
-        }
-    } catch (e) {
-        const list = document.getElementById('sidebar-trending-list');
-        if (list) list.innerHTML = '<div style="padding:20px;color:#a0aec0;text-align:center;">加载失败</div>';
-    }
-}
-
-function switchSidebarTab(platform) {
-    currentSidebarPlatform = platform;
-    document.querySelectorAll('#sidebar-tabs .sidebar-tab').forEach(tab => {
-        tab.classList.toggle('active', tab.textContent.includes(
-            {weibo:'微博',zhihu:'知乎',baidu:'百度',douyin:'抖音'}[platform]
-        ));
-    });
-    renderSidebarTrending();
-}
-
-function renderSidebarTrending() {
-    const list = document.getElementById('sidebar-trending-list');
-    if (!list) return;
-
-    const items = sidebarTrendingData[currentSidebarPlatform] || [];
-
-    if (items.length === 0) {
-        list.innerHTML = '<div style="padding:20px;color:#a0aec0;text-align:center;">暂无数据</div>';
+/**
+ * 渲染文章列表
+ */
+function renderArticlesList(articles) {
+    const listElement = document.getElementById('articles-list');
+    if (!articles || articles.length === 0) {
+        listElement.innerHTML = '<div class="empty-state">暂无文章数据</div>';
         return;
     }
 
-    list.innerHTML = items.slice(0, 15).map(item => {
-        const rank = item.rank_num || item.rank;
-        const rankClass = rank <= 3 ? ` top${rank}` : '';
-        const url = item.url || '#';
-        return `<a class="sidebar-item" href="${url}" target="_blank" rel="noopener">
-            <span class="sidebar-rank${rankClass}">${rank}</span>
-            <span class="sidebar-title">${escapeHtml(item.title)}</span>
-        </a>`;
-    }).join('');
-}
-
-// ==================== 首页侧边栏采集入库 ====================
-
-async function collectSidebarPlatform() {
-    const platform = currentSidebarPlatform;
-    const names = {weibo:'微博',zhihu:'知乎',baidu:'百度',douyin:'抖音'};
-    const name = names[platform] || platform;
-
-    const items = sidebarTrendingData[platform] || [];
-    if (items.length === 0) {
-        alert('该平台暂无热点数据');
-        return;
-    }
-
-    if (!confirm(`确定采集${name}的${items.length}条热点文章入库？`)) return;
-
-    const btn = document.getElementById('sidebar-collect-btn');
-    btn.disabled = true;
-    btn.textContent = '⏳ 采集中...';
-
-    try {
-        const resp = await fetch('/api/trending/collect', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ platform: platform, analyze: true })
-        });
-        const data = await resp.json();
-
-        if (data.success) {
-            const r = data.data;
-            btn.textContent = `✅ 成功${r.collected}篇`;
-            alert(`采集完成！\n成功: ${r.collected} 篇\n分析: ${r.analyzed || 0} 篇\n跳过: ${r.skipped} 篇\n失败: ${r.failed} 篇`);
-            refreshData();
-        } else {
-            alert('采集失败: ' + (data.error || '未知错误'));
-        }
-    } catch (e) {
-        alert('采集失败: ' + e.message);
-    } finally {
-        setTimeout(() => {
-            btn.disabled = false;
-            btn.textContent = '📥 采集当前平台热点入库';
-        }, 3000);
-    }
-}
-
-// ==================== 生成文章功能 ====================
-
-function showGenerateModal() {
-    document.getElementById('generate-modal').style.display = 'block';
-}
-
-function closeGenerateModal() {
-    document.getElementById('generate-modal').style.display = 'none';
-    document.getElementById('generate-result').innerHTML = '';
-}
-
-async function generateArticles() {
-    const count = parseInt(document.getElementById('generate-count').value) || 5;
-    const style = document.getElementById('generate-style').value;
-    const resultDiv = document.getElementById('generate-result');
-
-    resultDiv.innerHTML = '<div class="loading">生成中...</div>';
-
-    try {
-        const resp = await fetch('/api/generate', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({count, style})
-        });
-        const data = await resp.json();
-
-        if (data.success) {
-            resultDiv.innerHTML = `<div class="success">✓ 成功生成 ${data.data.generated} 篇文章</div>`;
-            setTimeout(() => closeGenerateModal(), 2000);
-        } else {
-            resultDiv.innerHTML = `<div class="error">✗ ${data.error}</div>`;
-        }
-    } catch (e) {
-        resultDiv.innerHTML = `<div class="error">✗ ${e.message}</div>`;
-    }
-}
-
-// ==================== 发布管理功能 ====================
-
-function showPublishModal() {
-    document.getElementById('publish-modal').style.display = 'block';
-    loadDrafts();
-}
-
-function closePublishModal() {
-    document.getElementById('publish-modal').style.display = 'none';
-}
-
-function switchPublishTab(tab) {
-    document.querySelectorAll('.publish-tabs .tab-btn').forEach(btn => {
-        btn.classList.toggle('active', btn.textContent.includes(tab === 'drafts' ? '草稿' : '发布'));
+    let html = '<div class="articles-grid">';
+    articles.forEach(article => {
+        html += `
+            <div class="article-card">
+                <h3 class="article-title">${escapeHtml(article.title)}</h3>
+                <div class="article-meta">
+                    <span>${article.account_name || '未知来源'}</span>
+                    <span>${formatDate(article.publish_time)}</span>
+                </div>
+                <div class="article-actions">
+                    <button class="btn btn-sm" onclick="viewArticle(${article.id})">查看</button>
+                    <button class="btn btn-sm btn-success" onclick="analyzeArticle(${article.id})">分析</button>
+                    <button class="btn btn-sm btn-danger" onclick="deleteArticle(${article.id})">删除</button>
+                </div>
+            </div>
+        `;
     });
-    document.querySelectorAll('.publish-tab-content').forEach(content => {
-        content.classList.remove('active');
-    });
-    document.getElementById(`publish-${tab}-tab`).classList.add('active');
-
-    if (tab === 'drafts') loadDrafts();
-    else loadPublished();
+    html += '</div>';
+    listElement.innerHTML = html;
 }
 
-async function loadDrafts() {
-    const listDiv = document.getElementById('drafts-list');
-    listDiv.innerHTML = '<div class="loading">加载中...</div>';
-
+/**
+ * 加载待分析文章
+ */
+async function loadUnanalyzedArticles() {
     try {
-        const resp = await fetch('/api/drafts');
-        const data = await resp.json();
-
-        if (data.success && data.data.length > 0) {
-            listDiv.innerHTML = data.data.map(article => `
-                <div class="draft-item" style="border:1px solid #e2e8f0;padding:15px;margin:10px 0;border-radius:8px;">
-                    <h4>${escapeHtml(article.title)}</h4>
-                    <p style="color:#718096;font-size:0.9em;">${escapeHtml(article.summary || '').substring(0, 100)}</p>
-                    <div style="margin-top:10px;">
-                        <button class="btn btn-sm btn-success" onclick="publishArticle(${article.id}, 'draft')">发布到草稿箱</button>
-                        <button class="btn btn-sm btn-primary" onclick="publishArticle(${article.id}, 'publish')">直接发布</button>
-                    </div>
-                </div>
-            `).join('');
-        } else {
-            listDiv.innerHTML = '<div style="padding:20px;text-align:center;color:#a0aec0;">暂无草稿</div>';
-        }
-    } catch (e) {
-        listDiv.innerHTML = `<div class="error">加载失败: ${e.message}</div>`;
-    }
-}
-
-async function loadPublished() {
-    const listDiv = document.getElementById('published-list');
-    listDiv.innerHTML = '<div class="loading">加载中...</div>';
-
-    try {
-        const resp = await fetch('/api/published');
-        const data = await resp.json();
-
-        if (data.success && data.data.length > 0) {
-            listDiv.innerHTML = data.data.map(record => `
-                <div class="publish-item" style="border:1px solid #e2e8f0;padding:15px;margin:10px 0;border-radius:8px;">
-                    <div><strong>文章ID:</strong> ${record.article_id}</div>
-                    <div><strong>状态:</strong> <span class="badge badge-${record.status}">${record.status}</span></div>
-                    <div><strong>发布时间:</strong> ${record.published_at || record.created_at}</div>
-                    <div style="color:#718096;font-size:0.9em;margin-top:5px;">${escapeHtml(record.result)}</div>
-                </div>
-            `).join('');
-        } else {
-            listDiv.innerHTML = '<div style="padding:20px;text-align:center;color:#a0aec0;">暂无发布记录</div>';
-        }
-    } catch (e) {
-        listDiv.innerHTML = `<div class="error">加载失败: ${e.message}</div>`;
-    }
-}
-
-async function publishArticle(articleId, publishType) {
-    if (!confirm(`确定要${publishType === 'draft' ? '发布到草稿箱' : '直接发布'}吗？`)) return;
-
-    try {
-        const resp = await fetch('/api/publish', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({article_ids: [articleId], publish_type: publishType})
-        });
-        const data = await resp.json();
-
-        if (data.success) {
-            alert('发布成功！');
-            loadDrafts();
-        } else {
-            alert('发布失败: ' + data.error);
-        }
-    } catch (e) {
-        alert('发布失败: ' + e.message);
-    }
-}
-
-// ==================== 公众号管理 ====================
-
-function showAccountModal() {
-    document.getElementById('account-modal').style.display = 'block';
-    loadAccounts();
-}
-
-function closeAccountModal() {
-    document.getElementById('account-modal').style.display = 'none';
-    hideAccountForm();
-}
-
-function showAccountForm() {
-    document.getElementById('account-form').style.display = 'block';
-    document.getElementById('account-id').value = '';
-    document.getElementById('account-name').value = '';
-    document.getElementById('account-appid').value = '';
-    document.getElementById('account-secret').value = '';
-    document.getElementById('account-keywords').value = '';
-    document.getElementById('account-style').value = 'news';
-    document.getElementById('account-prompt').value = '';
-}
-
-function hideAccountForm() {
-    document.getElementById('account-form').style.display = 'none';
-}
-
-async function loadAccounts() {
-    try {
-        const resp = await fetch('/api/accounts');
-        const data = await resp.json();
-
-        if (data.success) {
-            const listDiv = document.getElementById('accounts-list');
-            if (data.data.length === 0) {
-                listDiv.innerHTML = '<div style="padding:20px;text-align:center;color:#a0aec0;">暂无公众号配置</div>';
-                return;
-            }
-
-            listDiv.innerHTML = data.data.map(acc => `
-                <div style="border:1px solid #e2e8f0;padding:15px;margin:10px 0;border-radius:8px;">
-                    <div style="display:flex;justify-content:space-between;align-items:start;">
-                        <div style="flex:1;">
-                            <div style="font-weight:bold;font-size:1.1em;margin-bottom:8px;">${escapeHtml(acc.name)}</div>
-                            <div style="color:#718096;font-size:0.9em;">AppID: ${escapeHtml(acc.app_id)}</div>
-                            <div style="color:#718096;font-size:0.9em;">风格: ${acc.style_preference || 'news'}</div>
-                            <div style="color:#718096;font-size:0.9em;">关键词: ${escapeHtml(acc.topic_keywords || '无')}</div>
-                        </div>
-                        <div>
-                            <button class="btn btn-sm" onclick="editAccount(${acc.id})">编辑</button>
-                            <button class="btn btn-sm btn-danger" onclick="deleteAccount(${acc.id})">删除</button>
-                        </div>
-                    </div>
-                </div>
-            `).join('');
-        }
-    } catch (e) {
-        console.error('加载公众号失败:', e);
-    }
-}
-
-async function saveAccount() {
-    const id = document.getElementById('account-id').value;
-    const data = {
-        name: document.getElementById('account-name').value,
-        app_id: document.getElementById('account-appid').value,
-        app_secret: document.getElementById('account-secret').value,
-        topic_keywords: document.getElementById('account-keywords').value,
-        style_preference: document.getElementById('account-style').value,
-        custom_prompt: document.getElementById('account-prompt').value
-    };
-
-    if (!data.name || !data.app_id || !data.app_secret) {
-        alert('请填写必填项');
-        return;
-    }
-
-    try {
-        const url = id ? `/api/accounts/${id}` : '/api/accounts';
-        const method = id ? 'PUT' : 'POST';
-
-        const resp = await fetch(url, {
-            method: method,
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify(data)
-        });
-        const result = await resp.json();
-
+        const result = await API.articles.list(1, 50);
         if (result.success) {
-            alert('保存成功');
-            hideAccountForm();
-            loadAccounts();
+            const unanalyzed = result.data.articles.filter(a => !a.analysis);
+            const listElement = document.getElementById('unanalyzed-list');
+            if (unanalyzed.length === 0) {
+                listElement.innerHTML = '<div class="empty-state">暂无待分析文章</div>';
+            } else {
+                renderArticlesList(unanalyzed);
+            }
+        }
+    } catch (error) {
+        console.error('加载待分析文章失败:', error);
+    }
+}
+
+/**
+ * 加载参考文章列表
+ */
+async function loadReferenceArticles() {
+    try {
+        const result = await API.articles.list(1, 100);
+        if (result.success) {
+            const select = document.getElementById('reference-articles');
+            select.innerHTML = result.data.articles.map(a =>
+                `<option value="${a.id}">${escapeHtml(a.title)}</option>`
+            ).join('');
+        }
+    } catch (error) {
+        console.error('加载参考文章失败:', error);
+    }
+}
+
+/**
+ * 加载已发布文章
+ */
+async function loadPublishedArticles() {
+    try {
+        const result = await API.publish.published();
+        const listElement = document.getElementById('published-list');
+        if (result.success && result.data.length > 0) {
+            let html = '<div class="published-grid">';
+            result.data.forEach(item => {
+                html += `
+                    <div class="published-card">
+                        <h3>${escapeHtml(item.title)}</h3>
+                        <div class="published-meta">
+                            <span>公众号: ${escapeHtml(item.account_name)}</span>
+                            <span>发布时间: ${formatDate(item.publish_time)}</span>
+                        </div>
+                    </div>
+                `;
+            });
+            html += '</div>';
+            listElement.innerHTML = html;
         } else {
-            alert('保存失败: ' + result.error);
+            listElement.innerHTML = '<div class="empty-state">暂无已发布文章</div>';
         }
-    } catch (e) {
-        alert('保存失败: ' + e.message);
+    } catch (error) {
+        console.error('加载已发布文章失败:', error);
+        document.getElementById('published-list').innerHTML = '<div class="empty-state">加载失败</div>';
     }
 }
 
-async function editAccount(accountId) {
-    try {
-        const resp = await fetch('/api/accounts');
-        const data = await resp.json();
-        const account = data.data.find(a => a.id === accountId);
+// ==================== 页面加载时初始化 ====================
 
-        if (account) {
-            document.getElementById('account-id').value = account.id;
-            document.getElementById('account-name').value = account.name;
-            document.getElementById('account-appid').value = account.app_id;
-            document.getElementById('account-secret').value = account.app_secret;
-            document.getElementById('account-keywords').value = account.topic_keywords || '';
-            document.getElementById('account-style').value = account.style_preference || 'news';
-            document.getElementById('account-prompt').value = account.custom_prompt || '';
-            document.getElementById('account-form').style.display = 'block';
-        }
-    } catch (e) {
-        alert('加载失败: ' + e.message);
-    }
-}
-
-async function deleteAccount(accountId) {
-    if (!confirm('确定删除此公众号配置？')) return;
-
-    try {
-        const resp = await fetch(`/api/accounts/${accountId}`, {method: 'DELETE'});
-        const data = await resp.json();
-
-        if (data.success) {
-            alert('删除成功');
-            loadAccounts();
-        } else {
-            alert('删除失败: ' + data.error);
-        }
-    } catch (e) {
-        alert('删除失败: ' + e.message);
-    }
-}
-
-// ==================== 智能工作流 ====================
-
-async function startWorkflow(hotnewsId, parallel = true) {
-    try {
-        const resp = await fetch('/api/workflow/start', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({hotnews_id: hotnewsId, parallel: parallel})
-        });
-        const data = await resp.json();
-
-        if (data.success) {
-            alert(`工作流启动成功，处理了 ${data.data.length} 个公众号`);
-            loadPendingReviews();
-        } else {
-            alert('启动失败: ' + data.error);
-        }
-    } catch (e) {
-        alert('启动失败: ' + e.message);
-    }
-}
-
-async function loadPendingReviews() {
-    try {
-        const resp = await fetch('/api/workflow/pending');
-        const data = await resp.json();
-
-        if (data.success && data.data.length > 0) {
-            console.log('待审核任务:', data.data);
-        }
-    } catch (e) {
-        console.error('加载待审核任务失败:', e);
-    }
-}
-
-async function submitReview(threadId, decision) {
-    try {
-        const resp = await fetch('/api/workflow/review', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({thread_id: threadId, decision: decision})
-        });
-        const data = await resp.json();
-
-        if (data.success) {
-            alert('审核提交成功');
-            loadPendingReviews();
-        } else {
-            alert('提交失败: ' + data.error);
-        }
-    } catch (e) {
-        alert('提交失败: ' + e.message);
-    }
-}
+document.addEventListener('DOMContentLoaded', initApp);

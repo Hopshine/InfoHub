@@ -48,6 +48,11 @@ def index():
     """主页"""
     return render_template('index.html')
 
+@app.route('/app')
+def app_page():
+    """新版SPA应用入口"""
+    return render_template('app.html')
+
 @app.route('/api/stats')
 def get_stats():
     """获取统计信息"""
@@ -147,6 +152,33 @@ def delete_articles():
         return jsonify({
             'success': True,
             'data': {'deleted_count': deleted_count}
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/articles/unanalyzed')
+def get_unanalyzed_articles_api():
+    """专门返回待分析文章列表"""
+    try:
+        limit = int(request.args.get('limit', 10))
+        articles = db.get_unanalyzed_articles(limit=limit)
+        return jsonify({
+            'success': True,
+            'articles': articles
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/generated_articles')
+def get_generated_articles_api():
+    """获取所有生成文章（不限草稿状态）"""
+    try:
+        status = request.args.get('status')
+        limit = int(request.args.get('limit', 20))
+        articles = db.get_generated_articles(status=status, limit=limit)
+        return jsonify({
+            'success': True,
+            'articles': articles
         })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})

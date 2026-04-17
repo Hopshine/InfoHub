@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>InfoHub - 智能内容管理平台</title>
+    <link rel="stylesheet" href="/static/css/base.css">
+    <link rel="stylesheet" href="/static/css/layout.css">
+    <link rel="stylesheet" href="/static/css/components.css">
+    <link rel="stylesheet" href="/static/css/pages/dashboard.css">
+    <link rel="stylesheet" href="/static/css/pages/content.css">
+    <link rel="stylesheet" href="/static/css/pages/analysis.css">
+    <link rel="stylesheet" href="/static/css/pages/creation.css">
+    <link rel="stylesheet" href="/static/css/pages/publish.css">
+    <link rel="stylesheet" href="/static/css/pages/settings.css">
+</head>
+<body>
+    <div class="app-container">
+        <header class="top-bar">
+            <div class="logo">
+                <span class="logo-icon">📊</span>
+                <span class="logo-text">InfoHub</span>
+            </div>
+            <div class="user-info">
+                <span class="user-name" id="user-name">管理员</span>
+                <span class="user-avatar">👤</span>
+            </div>
+        </header>
+
+        <nav class="sidebar">
+            <a href="#/dashboard" class="nav-item active">
+                <span class="icon">🔥</span>
+                <span class="text">热点监控</span>
+            </a>
+            <a href="#/content" class="nav-item">
+                <span class="icon">📝</span>
+                <span class="text">内容库</span>
+            </a>
+            <a href="#/analysis" class="nav-item">
+                <span class="icon">🤖</span>
+                <span class="text">AI分析</span>
+            </a>
+            <a href="#/creation" class="nav-item">
+                <span class="icon">✍️</span>
+                <span class="text">创作中心</span>
+            </a>
+            <a href="#/publish" class="nav-item">
+                <span class="icon">📤</span>
+                <span class="text">发布管理</span>
+            </a>
+            <a href="#/settings" class="nav-item">
+                <span class="icon">⚙️</span>
+                <span class="text">系统设置</span>
+            </a>
+        </nav>
+
+        <main class="main-content" id="main-content">
+            <div class="loading-container" id="loading-container">
+                <div class="loading-spinner"></div>
+                <p class="loading-text">加载中...</p>
+            </div>
+        </main>
+    </div>
+
+    <script src="/static/js/utils.js"></script>
+    <script src="/static/js/api.js"></script>
+    <script src="/static/js/pages/dashboard.js"></script>
+    <script src="/static/js/pages/content.js"></script>
+    <script src="/static/js/pages/analysis.js"></script>
+    <script src="/static/js/pages/creation.js"></script>
+    <script src="/static/js/pages/publish.js"></script>
+    <script src="/static/js/pages/settings.js"></script>
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
