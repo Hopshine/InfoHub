@@ -189,6 +189,265 @@ class Database:
             )
         ''')
 
+        # LLM模型渠道表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS llm_providers (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                provider_type TEXT NOT NULL,
+                api_key TEXT,
+                base_url TEXT,
+                default_model TEXT NOT NULL,
+                max_tokens INTEGER DEFAULT 4000,
+                is_active INTEGER DEFAULT 1,
+                is_default INTEGER DEFAULT 0,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        # LLM功能绑定表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS llm_bindings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                function_key TEXT NOT NULL UNIQUE,
+                provider_id INTEGER NOT NULL,
+                model_override TEXT,
+                max_tokens_override INTEGER,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (provider_id) REFERENCES llm_providers(id)
+            )
+        ''')
+
+        # Agent任务表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS agent_tasks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_type TEXT NOT NULL,
+                stage TEXT,
+                task_key TEXT,
+                task_name TEXT,
+                status TEXT DEFAULT 'pending',
+                input_data TEXT,
+                output_data TEXT,
+                error_message TEXT,
+                parent_task_id INTEGER,
+                batch_id TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                started_at TEXT,
+                completed_at TEXT
+            )
+        ''')
+
+        for sql in [
+            "ALTER TABLE agent_tasks ADD COLUMN stage TEXT",
+            "ALTER TABLE agent_tasks ADD COLUMN task_key TEXT",
+            "ALTER TABLE agent_tasks ADD COLUMN task_name TEXT",
+            "ALTER TABLE agent_tasks ADD COLUMN error_message TEXT",
+            "ALTER TABLE agent_tasks ADD COLUMN started_at TEXT"
+        ]:
+            try:
+                cursor.execute(sql)
+            except sqlite3.OperationalError:
+                pass
+
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS agent_llm_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT NOT NULL,
+                batch_id TEXT,
+                stage TEXT,
+                provider TEXT,
+                model TEXT,
+                prompt TEXT,
+                response TEXT,
+                prompt_tokens INTEGER DEFAULT 0,
+                completion_tokens INTEGER DEFAULT 0,
+                total_tokens INTEGER DEFAULT 0,
+                duration_ms INTEGER DEFAULT 0,
+                metadata TEXT,
+                status TEXT DEFAULT 'success',
+                error TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_llm_logs_task
+            ON agent_llm_logs(task_id)
+        ''')
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_llm_logs_batch
+            ON agent_llm_logs(batch_id)
+        ''')
+
+        for sql in [
+            "ALTER TABLE agent_llm_logs ADD COLUMN provider TEXT",
+            "ALTER TABLE agent_llm_logs ADD COLUMN prompt TEXT",
+            "ALTER TABLE agent_llm_logs ADD COLUMN response TEXT",
+            "ALTER TABLE agent_llm_logs ADD COLUMN total_tokens INTEGER DEFAULT 0",
+            "ALTER TABLE agent_llm_logs ADD COLUMN metadata TEXT",
+        ]:
+            try:
+                cursor.execute(sql)
+            except sqlite3.OperationalError:
+                pass
+
+        # Agent任务执行日志表（并行执行器使用）
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS agent_task_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT NOT NULL,
+                batch_id TEXT,
+                stage TEXT,
+                status TEXT DEFAULT 'pending',
+                started_at TEXT,
+                completed_at TEXT,
+                duration_ms INTEGER,
+                input_summary TEXT,
+                output_summary TEXT,
+                error TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_task_logs_batch
+            ON agent_task_logs(batch_id)
+        ''')
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_task_logs_stage
+            ON agent_task_logs(batch_id, stage)
+        ''')
+
+        # Agent生成的推文
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS agent_articles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                topic_title TEXT NOT NULL,
+                platform TEXT,
+                hot_value TEXT,
+                value_score REAL,
+                article_type TEXT,
+                title TEXT NOT NULL,
+                content TEXT,
+                summary TEXT,
+                keywords TEXT,
+                quality_score REAL,
+                quality_detail TEXT,
+                status TEXT DEFAULT 'draft',
+                batch_id TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                published_at TEXT
+            )
+        ''')
+
+        # Agent Prompt模板表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS agent_prompts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                prompt_type TEXT NOT NULL,
+                content TEXT NOT NULL,
+                is_active INTEGER DEFAULT 0,
+                is_builtin INTEGER DEFAULT 0,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        # 话题工作流表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS topic_workflows (
+                id TEXT PRIMARY KEY,
+                batch_id TEXT NOT NULL,
+                topic_title TEXT NOT NULL,
+                platform TEXT,
+                hot_value TEXT,
+                current_stage TEXT,
+                status TEXT,
+                retry_count INTEGER DEFAULT 0,
+                created_at TEXT,
+                updated_at TEXT,
+                completed_at TEXT,
+                collect_result TEXT,
+                analysis_result TEXT,
+                plan_result TEXT,
+                article_id INTEGER,
+                quality_score REAL,
+                decisions TEXT
+            )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_workflow_batch ON topic_workflows(batch_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_workflow_status ON topic_workflows(status)')
+
+        # 工作流转换记录表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS workflow_transitions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                workflow_id TEXT NOT NULL,
+                from_stage TEXT,
+                to_stage TEXT,
+                action TEXT,
+                reason TEXT,
+                timestamp TEXT,
+                FOREIGN KEY (workflow_id) REFERENCES topic_workflows(id)
+            )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_transition_workflow ON workflow_transitions(workflow_id)')
+
+        # 微信草稿表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS wechat_drafts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                batch_id TEXT NOT NULL,
+                title TEXT,
+                summary TEXT,
+                article_ids TEXT,
+                article_count INTEGER,
+                cover_image TEXT,
+                status TEXT DEFAULT 'draft',
+                created_at TEXT
+            )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_draft_batch ON wechat_drafts(batch_id)')
+
+        conn.commit()
+        conn.close()
+
+        self._init_builtin_prompts()
+
+    def _init_builtin_prompts(self):
+        """首次启动时插入内置Prompt模板"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('SELECT COUNT(*) FROM agent_prompts WHERE is_builtin = 1')
+        if cursor.fetchone()[0] > 0:
+            conn.close()
+            return
+
+        builtin_prompts = [
+            {
+                'name': '热点筛选Prompt',
+                'prompt_type': 'topic_filter',
+                'content': '请从以下热点列表中筛选出最有价值的话题，考虑热度、时效性和内容深度。返回JSON数组，每项包含title、platform、hot_value、value_score(0-10)字段。',
+            },
+            {
+                'name': '文章生成Prompt',
+                'prompt_type': 'article_generate',
+                'content': '请根据以下热点话题撰写一篇高质量的自媒体文章。要求：标题吸引人、内容有深度、观点独到、语言流畅。返回JSON，包含title、content、summary、keywords字段。',
+            },
+            {
+                'name': '质量评估Prompt',
+                'prompt_type': 'quality_check',
+                'content': '请对以下文章进行质量评估，从原创性、可读性、信息量、标题吸引力、结构完整性五个维度打分(0-10)，并给出总分和改进建议。返回JSON，包含quality_score、detail(各维度分数)、suggestions字段。',
+            },
+        ]
+
+        for p in builtin_prompts:
+            cursor.execute('''
+                INSERT INTO agent_prompts (name, prompt_type, content, is_active, is_builtin)
+                VALUES (?, ?, ?, 1, 1)
+            ''', (p['name'], p['prompt_type'], p['content']))
+
         conn.commit()
         conn.close()
 
@@ -246,6 +505,25 @@ class Database:
             ORDER BY created_at DESC
             LIMIT ?
         ''', (limit,))
+
+        articles = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+        return articles
+
+    def get_articles_by_ids(self, article_ids: List[int]) -> List[Dict]:
+        """根据ID列表获取文章"""
+        if not article_ids:
+            return []
+
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        placeholders = ','.join('?' * len(article_ids))
+        cursor.execute(f'''
+            SELECT * FROM articles
+            WHERE id IN ({placeholders})
+        ''', article_ids)
 
         articles = [dict(row) for row in cursor.fetchall()]
         conn.close()
@@ -605,6 +883,40 @@ class Database:
         conn.commit()
         conn.close()
 
+    def update_generated_article(self, article_id: int, data: Dict) -> bool:
+        """更新生成的文章"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        try:
+            cursor.execute('''
+                UPDATE generated_articles
+                SET title = ?, content = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            ''', (
+                data.get('title', ''),
+                data.get('content', ''),
+                article_id
+            ))
+            conn.commit()
+            return cursor.rowcount > 0
+        except Exception:
+            return False
+        finally:
+            conn.close()
+
+    def delete_generated_article(self, article_id: int) -> bool:
+        """删除生成的文章"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        try:
+            cursor.execute('DELETE FROM generated_articles WHERE id = ?', (article_id,))
+            conn.commit()
+            return cursor.rowcount > 0
+        except Exception:
+            return False
+        finally:
+            conn.close()
+
     # ==================== 发布记录操作 ====================
 
     def insert_publish_record(self, record: Dict) -> Optional[int]:
@@ -804,6 +1116,562 @@ class Database:
             WHERE ws.status = 'pending' AND ws.current_node = 'human_review'
             ORDER BY ws.created_at
         ''')
+        results = [dict(r) for r in cursor.fetchall()]
+        conn.close()
+        return results
+
+    # ==================== LLM模型渠道操作 ====================
+
+    def create_llm_provider(self, data: Dict) -> Optional[int]:
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        try:
+            cursor.execute('''
+                INSERT INTO llm_providers
+                (name, provider_type, api_key, base_url, default_model, max_tokens, is_active, is_default)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                data['name'], data['provider_type'], data.get('api_key', ''),
+                data.get('base_url', ''), data['default_model'],
+                data.get('max_tokens', 4000), data.get('is_active', 1),
+                data.get('is_default', 0)
+            ))
+            conn.commit()
+            return cursor.lastrowid
+        except Exception:
+            return None
+        finally:
+            conn.close()
+
+    def get_llm_providers(self, active_only: bool = False) -> List[Dict]:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        if active_only:
+            cursor.execute('SELECT * FROM llm_providers WHERE is_active = 1 ORDER BY is_default DESC, created_at')
+        else:
+            cursor.execute('SELECT * FROM llm_providers ORDER BY is_default DESC, created_at')
+        results = [dict(r) for r in cursor.fetchall()]
+        conn.close()
+        return results
+
+    def get_llm_provider(self, provider_id: int) -> Optional[Dict]:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM llm_providers WHERE id = ?', (provider_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None
+
+    def update_llm_provider(self, provider_id: int, data: Dict):
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        fields = []
+        values = []
+        for key in ['name', 'provider_type', 'api_key', 'base_url', 'default_model', 'max_tokens', 'is_active']:
+            if key in data:
+                fields.append(f'{key} = ?')
+                values.append(data[key])
+        fields.append('updated_at = CURRENT_TIMESTAMP')
+        values.append(provider_id)
+        cursor.execute(f'UPDATE llm_providers SET {", ".join(fields)} WHERE id = ?', values)
+        conn.commit()
+        conn.close()
+
+    def delete_llm_provider(self, provider_id: int) -> bool:
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM llm_providers WHERE id = ?', (provider_id,))
+        deleted = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return deleted
+
+    def set_default_provider(self, provider_id: int):
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('UPDATE llm_providers SET is_default = 0')
+        cursor.execute('UPDATE llm_providers SET is_default = 1 WHERE id = ?', (provider_id,))
+        conn.commit()
+        conn.close()
+
+    # ==================== LLM功能绑定操作 ====================
+
+    def get_llm_binding(self, function_key: str) -> Optional[Dict]:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM llm_bindings WHERE function_key = ?', (function_key,))
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None
+
+    def get_all_llm_bindings(self) -> List[Dict]:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM llm_bindings')
+        results = [dict(r) for r in cursor.fetchall()]
+        conn.close()
+        return results
+
+    def upsert_llm_binding(self, function_key: str, provider_id: int,
+                           model_override: str = None, max_tokens_override: int = None):
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO llm_bindings (function_key, provider_id, model_override, max_tokens_override)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(function_key) DO UPDATE SET
+                provider_id = excluded.provider_id,
+                model_override = excluded.model_override,
+                max_tokens_override = excluded.max_tokens_override,
+                updated_at = CURRENT_TIMESTAMP
+        ''', (function_key, provider_id, model_override, max_tokens_override))
+        conn.commit()
+        conn.close()
+
+    # ==================== Agent Tasks ====================
+
+    def create_agent_task(self, task_data: Dict) -> Optional[int]:
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO agent_tasks (task_type, status, input_data, output_data, parent_task_id, batch_id)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (task_data.get('task_type'), task_data.get('status', 'pending'),
+              task_data.get('input_data'), task_data.get('output_data'),
+              task_data.get('parent_task_id'), task_data.get('batch_id')))
+        task_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return task_id
+
+    def get_agent_task(self, task_id: int) -> Optional[Dict]:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM agent_tasks WHERE id = ?', (task_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None
+
+    def update_agent_task(self, task_id: int, updates: Dict):
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        set_clause = ', '.join([f'{k} = ?' for k in updates.keys()])
+        values = list(updates.values()) + [task_id]
+        cursor.execute(f'UPDATE agent_tasks SET {set_clause} WHERE id = ?', values)
+        conn.commit()
+        conn.close()
+
+    def list_agent_tasks(self, batch_id: str = None, status: str = None, stage: str = None) -> List[Dict]:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        query = 'SELECT * FROM agent_tasks WHERE 1=1'
+        params = []
+        if batch_id:
+            query += ' AND batch_id = ?'
+            params.append(batch_id)
+        if status:
+            query += ' AND status = ?'
+            params.append(status)
+        if stage:
+            query += ' AND stage = ?'
+            params.append(stage)
+        query += ' ORDER BY created_at DESC'
+        cursor.execute(query, params)
+        results = [dict(r) for r in cursor.fetchall()]
+        conn.close()
+        return results
+
+    # ==================== Agent LLM Logs ====================
+
+    def create_agent_llm_log(self, log_data: Dict) -> Optional[int]:
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        tokens = log_data.get('tokens', {})
+        prompt_tokens = tokens.get('prompt_tokens', 0) if isinstance(tokens, dict) else log_data.get('prompt_tokens', 0)
+        completion_tokens = tokens.get('completion_tokens', 0) if isinstance(tokens, dict) else log_data.get('completion_tokens', 0)
+        total_tokens = tokens.get('total_tokens', 0) if isinstance(tokens, dict) else log_data.get('total_tokens', 0)
+        metadata = log_data.get('metadata')
+        if isinstance(metadata, dict):
+            metadata = json.dumps(metadata, ensure_ascii=False)
+        cursor.execute('''
+            INSERT INTO agent_llm_logs (task_id, batch_id, stage, provider, model,
+                prompt, response, prompt_tokens, completion_tokens, total_tokens,
+                duration_ms, metadata, status, error)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (log_data.get('task_id'), log_data.get('batch_id'),
+              log_data.get('stage'), log_data.get('provider'),
+              log_data.get('model'), log_data.get('prompt'),
+              log_data.get('response'),
+              prompt_tokens, completion_tokens, total_tokens,
+              log_data.get('duration_ms', 0),
+              metadata,
+              log_data.get('status', 'success'),
+              log_data.get('error')))
+        log_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return log_id
+
+    def get_agent_llm_logs_by_task(self, task_id: str) -> List[Dict]:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM agent_llm_logs WHERE task_id = ? ORDER BY created_at DESC', (task_id,))
+        results = [dict(r) for r in cursor.fetchall()]
+        conn.close()
+        return results
+
+    def get_agent_llm_logs_by_batch(self, batch_id: str) -> List[Dict]:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM agent_llm_logs WHERE batch_id = ? ORDER BY created_at DESC', (batch_id,))
+        results = [dict(r) for r in cursor.fetchall()]
+        conn.close()
+        return results
+
+    def get_agent_llm_logs(self, task_id: str = None, batch_id: str = None) -> List[Dict]:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        query = 'SELECT * FROM agent_llm_logs WHERE 1=1'
+        params = []
+        if task_id:
+            query += ' AND task_id = ?'
+            params.append(task_id)
+        if batch_id:
+            query += ' AND batch_id = ?'
+            params.append(batch_id)
+        query += ' ORDER BY created_at DESC'
+        cursor.execute(query, params)
+        results = [dict(r) for r in cursor.fetchall()]
+        conn.close()
+        return results
+
+    # ==================== Agent Task Logs ====================
+
+    def create_agent_task_log(self, task_data: Dict) -> Optional[int]:
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO agent_task_logs (task_id, batch_id, stage, status,
+                started_at, completed_at, duration_ms, input_summary, output_summary, error)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (task_data.get('task_id'), task_data.get('batch_id'),
+              task_data.get('stage'), task_data.get('status', 'pending'),
+              task_data.get('started_at'), task_data.get('completed_at'),
+              task_data.get('duration_ms'), task_data.get('input_summary'),
+              task_data.get('output_summary'), task_data.get('error')))
+        log_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return log_id
+
+    def update_agent_task_log(self, log_id: int, updates: Dict) -> None:
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        set_clause = ', '.join([f'{k} = ?' for k in updates.keys()])
+        values = list(updates.values()) + [log_id]
+        cursor.execute(f'UPDATE agent_task_logs SET {set_clause} WHERE id = ?', values)
+        conn.commit()
+        conn.close()
+
+    def get_agent_tasks_by_batch(self, batch_id: str, stage: str = None) -> List[Dict]:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        query = 'SELECT * FROM agent_task_logs WHERE batch_id = ?'
+        params: list = [batch_id]
+        if stage:
+            query += ' AND stage = ?'
+            params.append(stage)
+        query += ' ORDER BY created_at DESC'
+        cursor.execute(query, params)
+        results = [dict(r) for r in cursor.fetchall()]
+        conn.close()
+        return results
+
+    # ==================== Agent Articles ====================
+
+    def create_agent_article(self, article_data: Dict) -> Optional[int]:
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO agent_articles (topic_title, platform, hot_value, value_score, article_type,
+                                        title, content, summary, keywords, quality_score, quality_detail,
+                                        status, batch_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (article_data.get('topic_title'), article_data.get('platform'),
+              article_data.get('hot_value'), article_data.get('value_score'),
+              article_data.get('article_type'), article_data.get('title'),
+              article_data.get('content'), article_data.get('summary'),
+              article_data.get('keywords'), article_data.get('quality_score'),
+              article_data.get('quality_detail'), article_data.get('status', 'draft'),
+              article_data.get('batch_id')))
+        article_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return article_id
+
+    def get_agent_article(self, article_id: int) -> Optional[Dict]:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM agent_articles WHERE id = ?', (article_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None
+
+    def update_agent_article(self, article_id: int, updates: Dict):
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        set_clause = ', '.join([f'{k} = ?' for k in updates.keys()])
+        values = list(updates.values()) + [article_id]
+        cursor.execute(f'UPDATE agent_articles SET {set_clause} WHERE id = ?', values)
+        conn.commit()
+        conn.close()
+
+    def list_agent_articles(self, status: str = None, batch_id: str = None) -> List[Dict]:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        query = 'SELECT * FROM agent_articles WHERE 1=1'
+        params = []
+        if status:
+            query += ' AND status = ?'
+            params.append(status)
+        if batch_id:
+            query += ' AND batch_id = ?'
+            params.append(batch_id)
+        query += ' ORDER BY created_at DESC'
+        cursor.execute(query, params)
+        results = [dict(r) for r in cursor.fetchall()]
+        conn.close()
+        return results
+
+    def get_agent_articles_by_status(self, status: str) -> List[Dict]:
+        return self.list_agent_articles(status=status)
+
+    def get_agent_articles_by_batch(self, batch_id: str) -> List[Dict]:
+        """根据batch_id获取文章列表"""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM agent_articles WHERE batch_id = ? ORDER BY created_at DESC', (batch_id,))
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
+    # ==================== Agent Prompts ====================
+
+    def create_agent_prompt(self, prompt_data: Dict) -> Optional[int]:
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO agent_prompts (name, prompt_type, content, is_active, is_builtin)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (prompt_data.get('name'), prompt_data.get('prompt_type'),
+              prompt_data.get('content'), prompt_data.get('is_active', 0), 0))
+        prompt_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return prompt_id
+
+    def get_agent_prompt(self, prompt_id: int) -> Optional[Dict]:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM agent_prompts WHERE id = ?', (prompt_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None
+
+    def update_agent_prompt(self, prompt_id: int, updates: Dict):
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        updates['updated_at'] = datetime.now().isoformat()
+        set_clause = ', '.join([f'{k} = ?' for k in updates.keys()])
+        values = list(updates.values()) + [prompt_id]
+        cursor.execute(f'UPDATE agent_prompts SET {set_clause} WHERE id = ?', values)
+        conn.commit()
+        conn.close()
+
+    def delete_agent_prompt(self, prompt_id: int) -> bool:
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('SELECT is_builtin FROM agent_prompts WHERE id = ?', (prompt_id,))
+        row = cursor.fetchone()
+        if not row or row[0] == 1:
+            conn.close()
+            return False
+        cursor.execute('DELETE FROM agent_prompts WHERE id = ?', (prompt_id,))
+        conn.commit()
+        conn.close()
+        return True
+
+    def list_agent_prompts(self, prompt_type: str = None) -> List[Dict]:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        if prompt_type:
+            cursor.execute('SELECT * FROM agent_prompts WHERE prompt_type = ? ORDER BY created_at DESC', (prompt_type,))
+        else:
+            cursor.execute('SELECT * FROM agent_prompts ORDER BY created_at DESC')
+        results = [dict(r) for r in cursor.fetchall()]
+        conn.close()
+        return results
+
+    def get_active_agent_prompt(self, prompt_type: str) -> Optional[Dict]:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM agent_prompts WHERE prompt_type = ? AND is_active = 1 LIMIT 1', (prompt_type,))
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None
+
+    def activate_agent_prompt(self, prompt_id: int):
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('SELECT prompt_type FROM agent_prompts WHERE id = ?', (prompt_id,))
+        row = cursor.fetchone()
+        if not row:
+            conn.close()
+            return
+        prompt_type = row[0]
+        cursor.execute('UPDATE agent_prompts SET is_active = 0 WHERE prompt_type = ?', (prompt_type,))
+        cursor.execute('UPDATE agent_prompts SET is_active = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?', (prompt_id,))
+        conn.commit()
+        conn.close()
+
+    # ==================== Topic Workflows ====================
+
+    def create_topic_workflow(self, workflow_data: Dict) -> Optional[str]:
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        try:
+            cursor.execute('''
+                INSERT INTO topic_workflows (id, batch_id, topic_title, platform, hot_value,
+                    current_stage, status, retry_count, created_at, updated_at, completed_at,
+                    collect_result, analysis_result, plan_result, article_id, quality_score, decisions)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                workflow_data.get('id'), workflow_data.get('batch_id'),
+                workflow_data.get('topic_title'), workflow_data.get('platform'),
+                workflow_data.get('hot_value'), workflow_data.get('current_stage'),
+                workflow_data.get('status'), workflow_data.get('retry_count', 0),
+                workflow_data.get('created_at'), workflow_data.get('updated_at'),
+                workflow_data.get('completed_at'), workflow_data.get('collect_result'),
+                workflow_data.get('analysis_result'), workflow_data.get('plan_result'),
+                workflow_data.get('article_id'), workflow_data.get('quality_score'),
+                workflow_data.get('decisions')
+            ))
+            conn.commit()
+            return workflow_data.get('id')
+        except Exception:
+            return None
+        finally:
+            conn.close()
+
+    def update_topic_workflow(self, workflow_id: str, updates: Dict):
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        set_clause = ', '.join([f'{k} = ?' for k in updates.keys()])
+        values = list(updates.values()) + [workflow_id]
+        cursor.execute(f'UPDATE topic_workflows SET {set_clause} WHERE id = ?', values)
+        conn.commit()
+        conn.close()
+
+    def get_topic_workflows_by_batch(self, batch_id: str) -> List[Dict]:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM topic_workflows WHERE batch_id = ? ORDER BY created_at', (batch_id,))
+        results = [dict(r) for r in cursor.fetchall()]
+        conn.close()
+        return results
+
+    def get_topic_workflow(self, workflow_id: str) -> Optional[Dict]:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM topic_workflows WHERE id = ?', (workflow_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None
+
+    # ==================== Workflow Transitions ====================
+
+    def create_workflow_transition(self, transition_data: Dict) -> Optional[int]:
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        try:
+            cursor.execute('''
+                INSERT INTO workflow_transitions (workflow_id, from_stage, to_stage, action, reason, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (
+                transition_data.get('workflow_id'), transition_data.get('from_stage'),
+                transition_data.get('to_stage'), transition_data.get('action'),
+                transition_data.get('reason'),
+                transition_data.get('timestamp', datetime.now().isoformat())
+            ))
+            transition_id = cursor.lastrowid
+            conn.commit()
+            return transition_id
+        except Exception:
+            return None
+        finally:
+            conn.close()
+
+    def get_workflow_transitions(self, workflow_id: str) -> List[Dict]:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute(
+            'SELECT * FROM workflow_transitions WHERE workflow_id = ? ORDER BY timestamp',
+            (workflow_id,))
+        results = [dict(r) for r in cursor.fetchall()]
+        conn.close()
+        return results
+
+    # ==================== WeChat Drafts ====================
+
+    def create_wechat_draft(self, draft_data: Dict) -> Optional[int]:
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        try:
+            cursor.execute('''
+                INSERT INTO wechat_drafts (batch_id, title, summary, article_ids,
+                    article_count, cover_image, status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                draft_data.get('batch_id'), draft_data.get('title'),
+                draft_data.get('summary'), draft_data.get('article_ids'),
+                draft_data.get('article_count'), draft_data.get('cover_image'),
+                draft_data.get('status', 'draft'),
+                draft_data.get('created_at', datetime.now().isoformat())
+            ))
+            draft_id = cursor.lastrowid
+            conn.commit()
+            return draft_id
+        except Exception:
+            return None
+        finally:
+            conn.close()
+
+    def get_wechat_drafts_by_batch(self, batch_id: str) -> List[Dict]:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute(
+            'SELECT * FROM wechat_drafts WHERE batch_id = ? ORDER BY created_at DESC',
+            (batch_id,))
         results = [dict(r) for r in cursor.fetchall()]
         conn.close()
         return results

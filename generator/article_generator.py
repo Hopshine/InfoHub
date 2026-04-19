@@ -30,16 +30,32 @@ STYLE_PROMPTS = {
 class ArticleGenerator:
     """微信公众号文章生成器"""
 
-    def __init__(self, api_key: str = None, provider: str = None):
-        self.provider = provider or Config.LLM_PROVIDER
-        self.api_key = api_key or Config.LLM_API_KEY
-        self.base_url = Config.LLM_BASE_URL
-        self.model = Config.ARTICLE_MODEL
-        self.max_tokens = Config.ARTICLE_MAX_TOKENS
+    def __init__(self, api_key: str = None, provider: str = None, config: Optional[Dict] = None):
+        """
+        初始化生成器
 
-        if self.provider == 'openai':
+        Args:
+            api_key: API密钥（向后兼容）
+            provider: 提供商类型（向后兼容）
+            config: 配置字典 {provider_type, api_key, base_url, model, max_tokens}
+        """
+        if config:
+            self.provider = config['provider_type']
+            self.api_key = config['api_key']
+            self.base_url = config['base_url']
+            self.model = config['model']
+            self.max_tokens = config.get('max_tokens', 4000)
+        else:
+            # 向后兼容旧参数方式
+            self.provider = provider or Config.LLM_PROVIDER
+            self.api_key = api_key or Config.LLM_API_KEY
+            self.base_url = Config.LLM_BASE_URL
+            self.model = Config.ARTICLE_MODEL
+            self.max_tokens = Config.ARTICLE_MAX_TOKENS
+
+        if self.provider == 'openai' or self.provider == 'ollama':
             from openai import OpenAI
-            kwargs = {'api_key': self.api_key}
+            kwargs = {'api_key': self.api_key or 'ollama'}
             if self.base_url:
                 kwargs['base_url'] = self.base_url
             self.client = OpenAI(**kwargs)
@@ -52,7 +68,7 @@ class ArticleGenerator:
 
     def _call_llm(self, prompt: str) -> str:
         """调用LLM API"""
-        if self.provider == 'openai':
+        if self.provider == 'openai' or self.provider == 'ollama':
             response = self.client.chat.completions.create(
                 model=self.model,
                 max_tokens=self.max_tokens,

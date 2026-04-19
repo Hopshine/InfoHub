@@ -1,4 +1,4 @@
-from typing import Dict
+from typing import Dict, Optional
 from utils.logger import setup_logger
 from config import Config
 
@@ -7,15 +7,33 @@ logger = setup_logger('analyzer')
 class ContentAnalyzer:
     """内容分析器，支持 Anthropic 和 OpenAI 兼容 API"""
 
-    def __init__(self, api_key: str = None, base_url: str = None, provider: str = None):
-        self.provider = provider or Config.LLM_PROVIDER
-        self.api_key = api_key or Config.LLM_API_KEY
-        self.base_url = base_url or Config.LLM_BASE_URL
-        self.model = Config.ANALYSIS_MODEL
+    def __init__(self, api_key: str = None, base_url: str = None, provider: str = None, config: Optional[Dict] = None):
+        """
+        初始化分析器
 
-        if self.provider == 'openai':
+        Args:
+            api_key: API密钥（向后兼容）
+            base_url: API地址（向后兼容）
+            provider: 提供商类型（向后兼容）
+            config: 配置字典 {provider_type, api_key, base_url, model, max_tokens}
+        """
+        if config:
+            self.provider = config['provider_type']
+            self.api_key = config['api_key']
+            self.base_url = config['base_url']
+            self.model = config['model']
+            self.max_tokens = config.get('max_tokens', 2000)
+        else:
+            # 向后兼容旧参数方式
+            self.provider = provider or Config.LLM_PROVIDER
+            self.api_key = api_key or Config.LLM_API_KEY
+            self.base_url = base_url or Config.LLM_BASE_URL
+            self.model = Config.ANALYSIS_MODEL
+            self.max_tokens = 2000
+
+        if self.provider == 'openai' or self.provider == 'ollama':
             from openai import OpenAI
-            kwargs = {'api_key': self.api_key}
+            kwargs = {'api_key': self.api_key or 'ollama'}
             if self.base_url:
                 kwargs['base_url'] = self.base_url
             self.client = OpenAI(**kwargs)
@@ -45,7 +63,7 @@ class ContentAnalyzer:
         try:
             prompt = self._build_analysis_prompt(title, content)
 
-            if self.provider == 'openai':
+            if self.provider == 'openai' or self.provider == 'ollama':
                 response = self.client.chat.completions.create(
                     model=self.model,
                     max_tokens=2000,

@@ -9,10 +9,12 @@
     <link rel="stylesheet" href="/static/css/components.css">
     <link rel="stylesheet" href="/static/css/pages/dashboard.css">
     <link rel="stylesheet" href="/static/css/pages/content.css">
-    <link rel="stylesheet" href="/static/css/pages/analysis.css">
     <link rel="stylesheet" href="/static/css/pages/creation.css">
     <link rel="stylesheet" href="/static/css/pages/publish.css">
     <link rel="stylesheet" href="/static/css/pages/settings.css">
+    <link rel="stylesheet" href="/static/css/pages/agent.css">
+    <link rel="stylesheet" href="/static/css/components/agent-flow.css">
+    <link rel="stylesheet" href="/static/css/components/agent-dag.css">
 </head>
 <body>
     <div class="app-container">
@@ -32,13 +34,13 @@
                 <span class="icon">🔥</span>
                 <span class="text">热点监控</span>
             </a>
+            <a href="#/agent" class="nav-item">
+                <span class="icon">🤖</span>
+                <span class="text">野望Agent</span>
+            </a>
             <a href="#/content" class="nav-item">
                 <span class="icon">📝</span>
                 <span class="text">内容库</span>
-            </a>
-            <a href="#/analysis" class="nav-item">
-                <span class="icon">🤖</span>
-                <span class="text">AI分析</span>
             </a>
             <a href="#/creation" class="nav-item">
                 <span class="icon">✍️</span>
@@ -66,10 +68,13 @@
     <script src="/static/js/api.js"></script>
     <script src="/static/js/pages/dashboard.js"></script>
     <script src="/static/js/pages/content.js"></script>
-    <script src="/static/js/pages/analysis.js"></script>
     <script src="/static/js/pages/creation.js"></script>
     <script src="/static/js/pages/publish.js"></script>
     <script src="/static/js/pages/settings.js"></script>
+    <script src="/static/js/components/agent-flow.js"></script>
+    <script src="/static/js/components/agent-dag.js"></script>
+    <script src="/static/js/components/agent-detail-panel.js"></script>
+    <script src="/static/js/pages/agent.js"></script>
     <script src="/static/js/app.js"></script>
 </body>
 </html>
