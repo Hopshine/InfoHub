@@ -226,7 +226,14 @@ async function startBatchAnalysis() {
     }
 
     const progressDiv = document.getElementById('analysis-progress');
+    const progressText = document.getElementById('progress-text');
+    const progressPercent = document.getElementById('progress-percent');
+    const progressFill = document.getElementById('progress-fill');
+
     progressDiv.style.display = 'block';
+    progressText.textContent = `正在分析 ${selectedArticles.size} 篇文章，请稍候...`;
+    progressPercent.textContent = '0%';
+    progressFill.style.width = '0%';
 
     try {
         const response = await fetch('/api/analyze/batch', {
@@ -238,17 +245,47 @@ async function startBatchAnalysis() {
         const result = await response.json();
 
         if (result.success) {
-            currentJobId = result.data.job_id;
-            connectSSE(currentJobId);
+            const data = result.data;
+            progressText.textContent = `分析完成！成功 ${data.success} 篇，失败 ${data.failed} 篇`;
+            progressPercent.textContent = '100%';
+            progressFill.style.width = '100%';
+            progressFill.classList.add('completed');
+
+            // 显示结果详情
+            showBatchResults(data.results);
+
+            // 刷新列表
+            setTimeout(() => {
+                loadPendingArticles();
+                selectedArticles.clear();
+                updateSelectedCount();
+            }, 2000);
         } else {
-            alert('启动分析失败: ' + result.error);
+            alert('批量分析失败: ' + result.error);
             progressDiv.style.display = 'none';
         }
     } catch (error) {
         console.error('批量分析失败:', error);
-        alert('启动分析失败');
+        alert('批量分析失败');
         progressDiv.style.display = 'none';
     }
+}
+
+function showBatchResults(results) {
+    const resultsDiv = document.getElementById('analysis-results');
+    const resultsContent = document.getElementById('results-content');
+
+    if (!results || results.length === 0) return;
+
+    const html = results.map(r => `
+        <div class="result-item ${r.success ? 'result-success' : 'result-failed'}">
+            <span class="result-title">${escapeHtml(r.title)}</span>
+            <span class="result-status">${r.success ? '成功' : '失败: ' + (r.error || '未知错误')}</span>
+        </div>
+    `).join('');
+
+    resultsContent.innerHTML = html;
+    resultsDiv.style.display = 'block';
 }
 
 function connectSSE(jobId) {
@@ -256,28 +293,29 @@ function connectSSE(jobId) {
         sseSource.close();
     }
 
-    sseSource = new EventSource(`/api/analyze/progress/${jobId}`);
-
-    sseSource.onmessage = function(event) {
-        const data = JSON.parse(event.data);
-        updateProgress(data);
-
-        if (data.status === 'completed' || data.status === 'failed') {
-            sseSource.close();
-            sseSource = null;
-            setTimeout(() => {
-                loadPendingArticles();
-                selectedArticles.clear();
-                updateSelectedCount();
-            }, 2000);
-        }
-    };
-
-    sseSource.onerror = function() {
-        console.error('SSE连接错误');
-        sseSource.close();
-        sseSource = null;
-    };
+    // TODO: 等待后端实现 /api/analyze/progress 端点后再启用 SSE 连接
+    // sseSource = new EventSource(`/api/analyze/progress/${jobId}`);
+    //
+    // sseSource.onmessage = function(event) {
+    //     const data = JSON.parse(event.data);
+    //     updateProgress(data);
+    //
+    //     if (data.status === 'completed' || data.status === 'failed') {
+    //         sseSource.close();
+    //         sseSource = null;
+    //         setTimeout(() => {
+    //             loadPendingArticles();
+    //             selectedArticles.clear();
+    //             updateSelectedCount();
+    //         }, 2000);
+    //     }
+    // };
+    //
+    // sseSource.onerror = function() {
+    //     console.error('SSE连接错误');
+    //     sseSource.close();
+    //     sseSource = null;
+    // };
 }
 
 function updateProgress(data) {
@@ -302,10 +340,8 @@ function updateProgress(data) {
 
 async function analyzeOne(articleId) {
     try {
-        const response = await fetch('/api/analyze', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ article_id: articleId })
+        const response = await fetch(`/api/analyze/${articleId}`, {
+            method: 'POST'
         });
 
         const result = await response.json();
@@ -324,7 +360,7 @@ async function analyzeOne(articleId) {
 
 async function viewArticle(articleId) {
     try {
-        const response = await fetch(`/api/articles/${articleId}`);
+        const response = await fetch(`/api/article/${articleId}`);
         const result = await response.json();
 
         if (result.success) {

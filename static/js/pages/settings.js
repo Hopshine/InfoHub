@@ -74,25 +74,14 @@ function initSettingsPage() {
                     </div>
                 </div>
 
-                <!-- AI参数配置 -->
+                <!-- AI模型渠道管理 -->
                 <div class="settings-section">
                     <div class="section-header">
-                        <h2>AI参数配置</h2>
+                        <h2>AI模型渠道管理</h2>
+                        <button class="btn btn-primary btn-sm" onclick="SettingsPage.showProviderForm()">➕ 添加渠道</button>
                     </div>
-                    <div class="config-card">
-                        <div class="form-group">
-                            <label>模型选择</label>
-                            <select class="form-control">
-                                <option>GPT-4</option>
-                                <option>GPT-3.5</option>
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label>温度参数</label>
-                            <input type="range" min="0" max="1" step="0.1" value="0.7" class="form-control">
-                        </div>
-                        <button class="btn btn-primary">保存配置</button>
-                    </div>
+                    <div id="providers-container"></div>
+                    <div id="bindings-container" style="margin-top:24px;"></div>
                 </div>
 
                 <!-- 采集规则配置 -->
@@ -118,6 +107,7 @@ function initSettingsPage() {
 
     document.getElementById('main-content').innerHTML = content;
     loadAccounts();
+    loadProviders();
 }
 
 // 加载公众号列表
@@ -264,6 +254,216 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
+// ==================== LLM渠道管理 ====================
+
+let _providers = [];
+
+async function loadProviders() {
+    try {
+        const resp = await fetch('/api/llm/providers');
+        const data = await resp.json();
+        if (data.success) {
+            _providers = data.data || [];
+            renderProviders();
+            renderBindings();
+        }
+    } catch (e) {
+        console.error('加载渠道失败:', e);
+    }
+}
+
+function renderProviders() {
+    const container = document.getElementById('providers-container');
+    if (!container) return;
+    if (_providers.length === 0) {
+        container.innerHTML = '<div class="empty-state" style="padding:24px;text-align:center;color:#6b7280;">暂无模型渠道，请添加</div>';
+        return;
+    }
+    container.innerHTML = _providers.map(p => `
+        <div class="provider-card ${p.is_default ? 'provider-default' : ''}" style="border:1px solid #e5e7eb;border-radius:8px;padding:16px;margin-bottom:12px;${p.is_default ? 'border-color:#10b981;background:#f0fdf4;' : ''}">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                <div>
+                    <strong>${escapeHtml(p.name)}</strong>
+                    <span style="margin-left:8px;font-size:12px;padding:2px 8px;border-radius:4px;background:#f3f4f6;color:#6b7280;">${p.provider_type}</span>
+                    ${p.is_default ? '<span style="margin-left:8px;font-size:12px;padding:2px 8px;border-radius:4px;background:#d1fae5;color:#059669;">默认</span>' : ''}
+                </div>
+                <div style="font-size:13px;color:#6b7280;">${escapeHtml(p.default_model)}</div>
+            </div>
+            <div style="display:flex;gap:8px;margin-top:8px;">
+                <button class="btn btn-text btn-sm" onclick="SettingsPage.testProvider(${p.id})">🔍 测试</button>
+                <button class="btn btn-text btn-sm" onclick="SettingsPage.editProvider(${p.id})">✏️ 编辑</button>
+                ${!p.is_default ? `<button class="btn btn-text btn-sm" onclick="SettingsPage.setDefault(${p.id})">⭐ 默认</button>` : ''}
+                <button class="btn btn-text btn-sm" style="color:#ef4444;" onclick="SettingsPage.deleteProvider(${p.id})">🗑️ 删除</button>
+            </div>
+        </div>
+    `).join('');
+}
+
+function renderBindings() {
+    const container = document.getElementById('bindings-container');
+    if (!container || _providers.length === 0) {
+        if (container) container.innerHTML = '';
+        return;
+    }
+    const options = _providers.filter(p => p.is_active).map(p =>
+        `<option value="${p.id}">${escapeHtml(p.name)} (${p.default_model})</option>`
+    ).join('');
+
+    container.innerHTML = `
+        <h3 style="margin-bottom:12px;">功能模型绑定</h3>
+        <div style="display:flex;flex-direction:column;gap:12px;">
+            <div style="display:flex;align-items:center;gap:12px;">
+                <label style="min-width:100px;font-weight:600;">内容分析</label>
+                <select id="bind-content-analysis" class="form-control" style="flex:1;">
+                    <option value="">使用默认渠道</option>${options}
+                </select>
+            </div>
+            <div style="display:flex;align-items:center;gap:12px;">
+                <label style="min-width:100px;font-weight:600;">文章生成</label>
+                <select id="bind-article-generation" class="form-control" style="flex:1;">
+                    <option value="">使用默认渠道</option>${options}
+                </select>
+            </div>
+            <button class="btn btn-primary btn-sm" onclick="SettingsPage.saveBindings()" style="align-self:flex-start;">保存绑定</button>
+        </div>
+    `;
+    loadBindingValues();
+}
+
+async function loadBindingValues() {
+    try {
+        const resp = await fetch('/api/llm/bindings');
+        const data = await resp.json();
+        if (data.success) {
+            (data.data || []).forEach(b => {
+                const sel = document.getElementById('bind-' + b.function_key);
+                if (sel) sel.value = b.provider_id || '';
+            });
+        }
+    } catch (e) {}
+}
+
+function showProviderForm(provider) {
+    const isEdit = !!provider;
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:1000;';
+    overlay.innerHTML = `
+        <div style="background:#fff;border-radius:12px;max-width:500px;width:90%;max-height:90vh;overflow-y:auto;">
+            <div style="padding:16px 24px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;">
+                <h3 style="margin:0;">${isEdit ? '编辑渠道' : '添加渠道'}</h3>
+                <button style="background:none;border:none;font-size:20px;cursor:pointer;color:#6b7280;" onclick="this.closest('.modal-overlay').remove()">×</button>
+            </div>
+            <div style="padding:24px;">
+                <div class="form-group"><label>渠道名称 *</label><input type="text" id="prov-name" class="form-control" value="${isEdit ? escapeHtml(provider.name) : ''}" placeholder="如：Anthropic主力"></div>
+                <div class="form-group"><label>提供商类型</label>
+                    <select id="prov-type" class="form-control" onchange="SettingsPage.onTypeChange()">
+                        <option value="anthropic" ${isEdit && provider.provider_type === 'anthropic' ? 'selected' : ''}>Anthropic</option>
+                        <option value="openai" ${isEdit && provider.provider_type === 'openai' ? 'selected' : ''}>OpenAI兼容</option>
+                        <option value="ollama" ${isEdit && provider.provider_type === 'ollama' ? 'selected' : ''}>Ollama</option>
+                    </select>
+                </div>
+                <div class="form-group"><label>API地址</label><input type="text" id="prov-url" class="form-control" value="${isEdit ? escapeHtml(provider.base_url || '') : ''}" placeholder="留空使用官方默认"></div>
+                <div class="form-group" id="prov-key-group"><label>API密钥</label><input type="password" id="prov-key" class="form-control" value="${isEdit ? (provider.api_key || '') : ''}" placeholder="Ollama可留空"></div>
+                <div class="form-group"><label>模型名称 *</label><input type="text" id="prov-model" class="form-control" value="${isEdit ? escapeHtml(provider.default_model) : ''}" placeholder="如：claude-sonnet-4-6"></div>
+                <div class="form-group"><label>最大Token</label><input type="number" id="prov-tokens" class="form-control" value="${isEdit ? provider.max_tokens : 4000}"></div>
+                <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;">
+                    <button class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">取消</button>
+                    <button class="btn btn-primary" onclick="SettingsPage.saveProvider(${isEdit ? provider.id : 'null'})">${isEdit ? '保存' : '添加'}</button>
+                </div>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+    onTypeChange();
+}
+
+function onTypeChange() {
+    const type = document.getElementById('prov-type');
+    const keyGroup = document.getElementById('prov-key-group');
+    const urlInput = document.getElementById('prov-url');
+    if (!type) return;
+    if (type.value === 'ollama') {
+        if (keyGroup) keyGroup.style.display = 'none';
+        if (urlInput && !urlInput.value) urlInput.value = 'http://localhost:11434/v1';
+    } else {
+        if (keyGroup) keyGroup.style.display = '';
+        if (urlInput && urlInput.value === 'http://localhost:11434/v1') urlInput.value = '';
+    }
+}
+
+async function saveProvider(id) {
+    const data = {
+        name: document.getElementById('prov-name').value.trim(),
+        provider_type: document.getElementById('prov-type').value,
+        base_url: document.getElementById('prov-url').value.trim(),
+        api_key: document.getElementById('prov-key')?.value || '',
+        default_model: document.getElementById('prov-model').value.trim(),
+        max_tokens: parseInt(document.getElementById('prov-tokens').value) || 4000
+    };
+    if (!data.name || !data.default_model) { alert('名称和模型不能为空'); return; }
+    try {
+        const url = id ? `/api/llm/providers/${id}` : '/api/llm/providers';
+        const resp = await fetch(url, { method: id ? 'PUT' : 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) });
+        const result = await resp.json();
+        if (result.success) {
+            document.querySelector('.modal-overlay')?.remove();
+            loadProviders();
+        } else { alert('保存失败: ' + result.error); }
+    } catch (e) { alert('保存失败: ' + e.message); }
+}
+
+async function editProvider(id) {
+    const p = _providers.find(x => x.id === id);
+    if (p) showProviderForm(p);
+}
+
+async function testProvider(id) {
+    const btn = event.target;
+    btn.disabled = true; btn.textContent = '测试中...';
+    try {
+        const resp = await fetch(`/api/llm/providers/${id}/test`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+        const result = await resp.json();
+        alert(result.success ? `连接成功 (${result.data.elapsed}秒)` : '连接失败: ' + result.error);
+    } catch (e) { alert('测试失败: ' + e.message); }
+    btn.disabled = false; btn.textContent = '🔍 测试';
+}
+
+async function deleteProvider(id) {
+    if (!confirm('确定删除该渠道吗？')) return;
+    try {
+        const resp = await fetch(`/api/llm/providers/${id}`, { method: 'DELETE' });
+        const result = await resp.json();
+        if (result.success) { loadProviders(); } else { alert('删除失败: ' + result.error); }
+    } catch (e) { alert('删除失败: ' + e.message); }
+}
+
+async function setDefault(id) {
+    try {
+        const resp = await fetch(`/api/llm/providers/${id}/default`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+        const result = await resp.json();
+        if (result.success) loadProviders();
+    } catch (e) { alert('设置失败: ' + e.message); }
+}
+
+async function saveBindings() {
+    const bindings = [
+        { function_key: 'content_analysis', provider_id: parseInt(document.getElementById('bind-content-analysis')?.value) || null },
+        { function_key: 'article_generation', provider_id: parseInt(document.getElementById('bind-article-generation')?.value) || null }
+    ].filter(b => b.provider_id);
+    try {
+        const resp = await fetch('/api/llm/bindings', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(bindings) });
+        const result = await resp.json();
+        alert(result.success ? '绑定已保存' : '保存失败: ' + result.error);
+    } catch (e) { alert('保存失败: ' + e.message); }
+}
+
 // 导出公共接口
 window.settingsPage = {
     render: initSettingsPage,
@@ -273,6 +473,17 @@ window.settingsPage = {
     saveAccount,
     editAccount,
     deleteAccount
+};
+
+window.SettingsPage = {
+    showProviderForm: () => showProviderForm(null),
+    editProvider,
+    testProvider,
+    deleteProvider,
+    setDefault,
+    saveProvider,
+    saveBindings,
+    onTypeChange
 };
 
 })();

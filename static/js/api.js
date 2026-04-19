@@ -78,7 +78,7 @@ const API = {
          */
         deleteBatch: (ids) => request('/api/articles/delete', {
             method: 'POST',
-            body: JSON.stringify({ ids })
+            body: JSON.stringify({ article_ids: ids })
         })
     },
 
@@ -132,7 +132,7 @@ const API = {
          */
         search: (keyword, count = 10) => request('/api/collect/search', {
             method: 'POST',
-            body: JSON.stringify({ keyword, count })
+            body: JSON.stringify({ keyword, max_results: count })
         })
     },
 
@@ -215,7 +215,7 @@ const API = {
          */
         collect: (items) => request('/api/trending/collect', {
             method: 'POST',
-            body: JSON.stringify({ items })
+            body: JSON.stringify({ ids: items })
         })
     },
 

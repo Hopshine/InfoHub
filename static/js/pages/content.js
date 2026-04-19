@@ -1,8 +1,10 @@
 const ContentPage = (() => {
   let currentPage = 1;
+  let currentLimit = 20;
   let allArticles = [];
   let selectedArticles = new Set();
   let statsData = {};
+  let _resizeTimer = null;
 
   function render() {
     return `
@@ -69,6 +71,11 @@ const ContentPage = (() => {
 
   async function init() {
     await Promise.all([loadStats(), loadArticles()]);
+    // 窗口大小变化时重新计算每页数量
+    window.addEventListener('resize', () => {
+      clearTimeout(_resizeTimer);
+      _resizeTimer = setTimeout(() => loadArticles(currentPage), 300);
+    });
   }
 
   async function loadStats() {
@@ -104,12 +111,27 @@ const ContentPage = (() => {
     const list = document.getElementById('content-list');
     list.innerHTML = '<div class="loading-spinner"></div>';
 
+    // 动态计算每页数量，填满可用屏幕空间
+    const containerWidth = list.offsetWidth || 1200;
+    const cardMinWidth = 320;
+    const gap = 24;
+    const cols = Math.floor((containerWidth + gap) / (cardMinWidth + gap)) || 1;
+
+    // 根据可用高度计算行数
+    const mainContent = document.getElementById('main-content');
+    const listTop = list.getBoundingClientRect().top;
+    const availableHeight = window.innerHeight - listTop - 80; // 80px留给分页器
+    const cardHeight = 180; // 卡片估算高度
+    const rows = Math.max(2, Math.floor(availableHeight / (cardHeight + gap)));
+    const limit = cols * rows;
+
     try {
-      const resp = await fetch(`/api/articles?page=${page}&limit=20`);
+      const resp = await fetch(`/api/articles?page=${page}&limit=${limit}`);
       const data = await resp.json();
       if (data.success) {
         allArticles = data.data.articles;
         currentPage = page;
+        currentLimit = limit;
         displayArticles(allArticles);
         updatePagination(data.data);
       }
@@ -128,41 +150,52 @@ const ContentPage = (() => {
 
     list.innerHTML = articles.map(article => {
       const sourceInfo = getSourceInfo(article);
-      const preview = !article.summary ? getPreview(article.content, 120) : '';
+      const preview = !article.summary ? getPreview(article.content, 80) : '';
       const time = formatTime(article.created_at || article.publish_time);
+      const fullContent = article.content || article.summary || '';
 
       return `
-        <div class="content-item">
-          <div class="content-item-checkbox">
+        <div class="content-card">
+          <div class="content-card-checkbox">
             <input type="checkbox" class="content-checkbox"
                    data-id="${article.id}"
                    onchange="ContentPage.toggleSelect(${article.id})"
                    ${selectedArticles.has(article.id) ? 'checked' : ''}>
           </div>
-          <div class="content-item-body" onclick="ContentPage.showDetail(${article.id})">
-            <div class="content-item-header">
-              <div class="content-item-title">${escapeHtml(article.title)}</div>
-              <div class="content-item-badges">
+          <div class="content-card-body" onclick="ContentPage.showDetail(${article.id})">
+            <div class="content-card-header">
+              <div class="content-card-title">${escapeHtml(article.title)}</div>
+              <div class="content-card-badges">
                 ${sourceInfo ? `<span class="badge badge-source badge-${sourceInfo.cls}">${sourceInfo.label}</span>` : ''}
                 <span class="badge ${article.analysis ? 'badge-green' : 'badge-gray'}">
                   ${article.analysis ? '已分析' : '待分析'}
                 </span>
               </div>
             </div>
-            <div class="content-item-meta">
+            <div class="content-card-meta">
               ${article.account_name ? `<span>${escapeHtml(article.account_name)}</span>` : ''}
               ${time ? `<span>${time}</span>` : ''}
               ${article.category ? `<span class="badge badge-gray">${escapeHtml(article.category)}</span>` : ''}
             </div>
-            ${preview ? `<div class="content-item-preview">${escapeHtml(preview)}</div>` : ''}
-            ${article.summary ? `<div class="content-item-summary">${escapeHtml(article.summary)}</div>` : ''}
+            ${preview ? `<div class="content-card-preview">${escapeHtml(preview)}</div>` : ''}
+            ${article.summary ? `<div class="content-card-summary">${escapeHtml(article.summary)}</div>` : ''}
             ${article.keywords ? `
-              <div class="content-item-tags">
+              <div class="content-card-tags">
                 ${article.keywords.split(',').slice(0, 5).map(k =>
                   `<span class="badge badge-gray">${escapeHtml(k.trim())}</span>`
                 ).join('')}
               </div>
             ` : ''}
+            <div class="content-card-hover-detail">
+              <div class="hover-detail-title">完整内容</div>
+              <div class="hover-detail-content">${escapeHtml(fullContent.substring(0, 500))}${fullContent.length > 500 ? '...' : ''}</div>
+              ${article.analysis ? `
+                <div class="hover-detail-section">
+                  <div class="hover-detail-label">AI分析</div>
+                  <div class="hover-detail-text">${escapeHtml(article.analysis.substring(0, 200))}${article.analysis.length > 200 ? '...' : ''}</div>
+                </div>
+              ` : ''}
+            </div>
           </div>
         </div>`;
     }).join('');

@@ -8,6 +8,8 @@ const DashboardPage = (() => {
 
   let currentPlatform = 'all';
   let trendingData = {};
+  let collectQueue = []; // 采集任务队列
+  let isCollecting = false;
 
   function render() {
     return `
@@ -24,9 +26,19 @@ const DashboardPage = (() => {
             <button class="btn btn-secondary btn-sm" onclick="DashboardPage.refresh()">
               🔄 立即刷新
             </button>
-            <button class="btn btn-primary btn-sm" onclick="DashboardPage.collectAll()">
+            <button class="btn btn-primary btn-sm" id="collect-all-btn" onclick="DashboardPage.collectAll()">
               📥 一键采集
             </button>
+            <div id="collect-progress-bar" class="collect-progress-bar" style="display:none;">
+              <div class="collect-progress-track">
+                <div class="collect-progress-fill" id="collect-progress-fill"></div>
+              </div>
+              <span class="collect-progress-text" id="collect-progress-text">0/0</span>
+              <div class="collect-progress-tooltip" id="collect-progress-tooltip">
+                <div class="tooltip-title">采集详情</div>
+                <div class="tooltip-body" id="collect-tooltip-body"></div>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -133,7 +145,11 @@ const DashboardPage = (() => {
     html += `<span class="trending-panel-title">${name}</span>`;
     html += `<div class="trending-panel-actions">`;
     html += `<span class="trending-item-count">${items.length} 条</span>`;
-    html += `<button class="btn btn-text btn-sm" onclick="event.stopPropagation();DashboardPage.collectPlatform('${platform}')" title="采集该平台热点文章到文章库">📥 采集入库</button>`;
+    html += `<button class="btn btn-text btn-sm" id="collect-btn-${platform}" onclick="event.stopPropagation();DashboardPage.collectPlatform('${platform}')" title="采集该平台热点文章到文章库">📥 采集入库</button>`;
+    html += `<div class="collect-mini-progress" id="collect-mini-${platform}" style="display:none;">
+      <div class="mini-progress-track"><div class="mini-progress-fill" id="mini-fill-${platform}"></div></div>
+      <span class="mini-progress-text" id="mini-text-${platform}"></span>
+    </div>`;
     html += `</div>`;
     html += `</div>`;
     html += `<div class="trending-grid">`;
@@ -211,118 +227,148 @@ const DashboardPage = (() => {
   }
 
   async function collectAll() {
-    if (!confirm('确定要采集所有平台的热点文章吗？这可能需要较长时间。')) {
-      return;
-    }
-
-    showCollectProgress('all', '全部平台');
-
-    try {
-      const resp = await fetch('/api/trending/collect', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ platform: 'all' })
-      });
-      const data = await resp.json();
-
-      if (data.success) {
-        updateCollectProgress('all', data.data);
-      } else {
-        throw new Error(data.error || '采集失败');
-      }
-    } catch (e) {
-      hideCollectProgress();
-      alert('采集失败: ' + e.message);
-    }
+    const platforms = Object.keys(PLATFORM_NAMES);
+    platforms.forEach(p => addToQueue(p));
+    processQueue();
   }
 
   async function collectPlatform(platform) {
-    const name = PLATFORM_NAMES[platform] || platform;
-    if (!confirm(`确定要采集 ${name} 的热点文章吗？`)) {
+    addToQueue(platform);
+    processQueue();
+  }
+
+  function addToQueue(platform) {
+    if (collectQueue.find(t => t.platform === platform && t.status !== 'done' && t.status !== 'error')) return;
+    collectQueue.push({
+      platform,
+      name: PLATFORM_NAMES[platform] || platform,
+      status: 'pending', // pending | running | done | error
+      result: null
+    });
+    renderProgress();
+  }
+
+  async function processQueue() {
+    if (isCollecting) return;
+    isCollecting = true;
+
+    while (true) {
+      const task = collectQueue.find(t => t.status === 'pending');
+      if (!task) break;
+
+      task.status = 'running';
+      renderProgress();
+
+      try {
+        const resp = await fetch('/api/trending/collect', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ platform: task.platform })
+        });
+        const data = await resp.json();
+
+        if (data.success) {
+          task.status = 'done';
+          task.result = data.data;
+        } else {
+          task.status = 'error';
+          task.result = { error: data.error || '采集失败' };
+        }
+      } catch (e) {
+        task.status = 'error';
+        task.result = { error: e.message };
+      }
+
+      renderProgress();
+    }
+
+    isCollecting = false;
+
+    // 5秒后自动清理已完成的队列
+    setTimeout(() => {
+      collectQueue = collectQueue.filter(t => t.status !== 'done' && t.status !== 'error');
+      renderProgress();
+    }, 8000);
+  }
+
+  function renderProgress() {
+    const bar = document.getElementById('collect-progress-bar');
+    const fill = document.getElementById('collect-progress-fill');
+    const text = document.getElementById('collect-progress-text');
+    const tooltipBody = document.getElementById('collect-tooltip-body');
+    const btn = document.getElementById('collect-all-btn');
+
+    if (!bar) return;
+
+    if (collectQueue.length === 0) {
+      bar.style.display = 'none';
+      if (btn) { btn.disabled = false; btn.textContent = '📥 一键采集'; }
+      // 隐藏所有平台mini进度
+      Object.keys(PLATFORM_NAMES).forEach(p => {
+        const mini = document.getElementById(`collect-mini-${p}`);
+        if (mini) mini.style.display = 'none';
+        const pbtn = document.getElementById(`collect-btn-${p}`);
+        if (pbtn) { pbtn.style.display = ''; pbtn.disabled = false; }
+      });
       return;
     }
 
-    showCollectProgress(platform, name);
+    bar.style.display = 'flex';
+    if (btn) { btn.disabled = true; btn.textContent = '采集中...'; }
 
-    try {
-      const resp = await fetch('/api/trending/collect', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ platform })
-      });
-      const data = await resp.json();
+    const done = collectQueue.filter(t => t.status === 'done').length;
+    const error = collectQueue.filter(t => t.status === 'error').length;
+    const total = collectQueue.length;
+    const finished = done + error;
+    const percent = total > 0 ? Math.round((finished / total) * 100) : 0;
 
-      if (data.success) {
-        updateCollectProgress(platform, data.data);
+    fill.style.width = percent + '%';
+    fill.className = 'collect-progress-fill' + (error > 0 ? ' has-error' : '') + (finished === total ? ' completed' : '');
+    text.textContent = `${finished}/${total}`;
+
+    // 更新tooltip详情
+    tooltipBody.innerHTML = collectQueue.map(t => {
+      const icon = t.status === 'done' ? '✅' : t.status === 'error' ? '❌' : t.status === 'running' ? '⏳' : '⏸️';
+      let detail = '';
+      if (t.status === 'done' && t.result) {
+        detail = `成功${t.result.collected || 0} 跳过${t.result.skipped || 0} 失败${t.result.failed || 0}`;
+      } else if (t.status === 'error' && t.result) {
+        detail = t.result.error || '未知错误';
+      } else if (t.status === 'running') {
+        detail = '采集中...';
       } else {
-        throw new Error(data.error || '采集失败');
+        detail = '等待中';
       }
-    } catch (e) {
-      hideCollectProgress();
-      alert('采集失败: ' + e.message);
-    }
-  }
+      return `<div class="tooltip-row">
+        <span class="tooltip-icon">${icon}</span>
+        <span class="tooltip-name">${t.name}</span>
+        <span class="tooltip-detail">${detail}</span>
+      </div>`;
+    }).join('');
 
-  function showCollectProgress(platform, name) {
-    const overlay = document.createElement('div');
-    overlay.id = 'collect-overlay';
-    overlay.className = 'modal-overlay';
-    overlay.innerHTML = `
-      <div class="modal-content">
-        <div class="modal-header">
-          <h3>采集进度</h3>
-        </div>
-        <div class="modal-body" id="collect-progress-body">
-          <div class="loading-spinner"></div>
-          <p style="text-align:center;margin-top:16px;">正在采集 ${name}...</p>
-        </div>
-      </div>
-    `;
-    document.body.appendChild(overlay);
-  }
+    // 更新每个平台的mini进度
+    collectQueue.forEach(t => {
+      const mini = document.getElementById(`collect-mini-${t.platform}`);
+      const miniFill = document.getElementById(`mini-fill-${t.platform}`);
+      const miniText = document.getElementById(`mini-text-${t.platform}`);
+      const pbtn = document.getElementById(`collect-btn-${t.platform}`);
 
-  function updateCollectProgress(platform, result) {
-    const body = document.getElementById('collect-progress-body');
-    const name = PLATFORM_NAMES[platform] || platform;
-
-    body.innerHTML = `
-      <div class="collect-result-success">
-        <div class="collect-result-icon">✅</div>
-        <div class="collect-result-title">${name} 采集完成</div>
-      </div>
-      <div class="collect-stats">
-        <div class="collect-stat-item">
-          <div class="collect-stat-value">${result.collected || 0}</div>
-          <div class="collect-stat-label">成功采集</div>
-        </div>
-        <div class="collect-stat-item">
-          <div class="collect-stat-value">${result.analyzed || 0}</div>
-          <div class="collect-stat-label">已分析</div>
-        </div>
-        <div class="collect-stat-item">
-          <div class="collect-stat-value">${result.skipped || 0}</div>
-          <div class="collect-stat-label">已跳过</div>
-        </div>
-        <div class="collect-stat-item">
-          <div class="collect-stat-value">${result.failed || 0}</div>
-          <div class="collect-stat-label">失败</div>
-        </div>
-      </div>
-      ${result.articles && result.articles.length > 0 ? `
-        <div class="collect-article-list">
-          ${result.articles.slice(0, 10).map(a =>
-            `<div class="collect-article-item">✓ ${escapeHtml(a.title)}</div>`
-          ).join('')}
-          ${result.articles.length > 10 ? `<div class="collect-article-item" style="color:var(--color-gray-500);">...还有 ${result.articles.length - 10} 篇</div>` : ''}
-        </div>
-      ` : ''}
-      <button class="btn btn-primary" onclick="DashboardPage.hideCollectProgress()" style="margin-top:16px;width:100%;">关闭</button>
-    `;
-  }
-
-  function hideCollectProgress() {
-    const overlay = document.getElementById('collect-overlay');
-    if (overlay) overlay.remove();
+      if (mini) {
+        mini.style.display = 'inline-flex';
+        if (pbtn) pbtn.style.display = 'none';
+      }
+      if (miniFill) {
+        const w = t.status === 'done' ? '100%' : t.status === 'running' ? '60%' : '0%';
+        miniFill.style.width = w;
+        miniFill.className = 'mini-progress-fill' + (t.status === 'done' ? ' done' : '') + (t.status === 'error' ? ' error' : '');
+      }
+      if (miniText) {
+        miniText.textContent = t.status === 'done' ? `✅ ${t.result?.collected || 0}篇`
+          : t.status === 'error' ? '❌'
+          : t.status === 'running' ? '⏳'
+          : '⏸️';
+      }
+    });
   }
 
   return {
@@ -333,7 +379,6 @@ const DashboardPage = (() => {
     refresh,
     collectAll,
     collectPlatform,
-    hideCollectProgress
   };
 })();
 

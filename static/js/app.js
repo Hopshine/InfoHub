@@ -22,15 +22,15 @@ const Routes = {
         module: 'dashboard',
         loader: () => loadDashboardModule()
     },
+    '/agent': {
+        name: '野望Agent',
+        module: 'agent',
+        loader: () => loadAgentModule()
+    },
     '/content': {
         name: '内容库',
         module: 'content',
         loader: () => loadContentModule()
-    },
-    '/analysis': {
-        name: 'AI分析',
-        module: 'analysis',
-        loader: () => loadAnalysisModule()
     },
     '/creation': {
         name: '创作中心',
@@ -209,6 +209,27 @@ async function loadDashboardModule() {
 }
 
 /**
+ * 加载野望Agent模块
+ */
+async function loadAgentModule() {
+    if (typeof window.AgentPage !== 'undefined' && typeof window.AgentPage.render === 'function') {
+        AppState.mainContent.innerHTML = window.AgentPage.render();
+        if (typeof window.AgentPage.init === 'function') {
+            await window.AgentPage.init();
+        }
+    } else {
+        AppState.mainContent.innerHTML = `
+            <div class="error-container" style="text-align:center;padding:60px 20px;">
+                <div style="font-size:48px;margin-bottom:20px;">⚠️</div>
+                <h2 style="color:#ff4d4f;margin-bottom:12px;">模块加载失败</h2>
+                <p style="color:#8c8c8c;margin-bottom:24px;">野望Agent模块未正确加载</p>
+                <button class="btn btn-primary" onclick="location.reload()">刷新页面</button>
+            </div>
+        `;
+    }
+}
+
+/**
  * 加载内容库模块
  */
 async function loadContentModule() {
@@ -223,27 +244,6 @@ async function loadContentModule() {
                 <div style="font-size:48px;margin-bottom:20px;">⚠️</div>
                 <h2 style="color:#ff4d4f;margin-bottom:12px;">模块加载失败</h2>
                 <p style="color:#8c8c8c;margin-bottom:24px;">内容库模块未正确加载</p>
-                <button class="btn btn-primary" onclick="location.reload()">刷新页面</button>
-            </div>
-        `;
-    }
-}
-
-/**
- * 加载AI分析模块
- */
-async function loadAnalysisModule() {
-    if (typeof window.analysisPage !== 'undefined' && typeof window.analysisPage.render === 'function') {
-        AppState.mainContent.innerHTML = window.analysisPage.render();
-        if (typeof window.analysisPage.init === 'function') {
-            await window.analysisPage.init();
-        }
-    } else {
-        AppState.mainContent.innerHTML = `
-            <div class="error-container" style="text-align:center;padding:60px 20px;">
-                <div style="font-size:48px;margin-bottom:20px;">⚠️</div>
-                <h2 style="color:#ff4d4f;margin-bottom:12px;">模块加载失败</h2>
-                <p style="color:#8c8c8c;margin-bottom:24px;">AI分析模块未正确加载</p>
                 <button class="btn btn-primary" onclick="location.reload()">刷新页面</button>
             </div>
         `;
@@ -431,7 +431,7 @@ async function loadReferenceArticles() {
  */
 async function loadPublishedArticles() {
     try {
-        const result = await API.publish.published();
+        const result = await API.published.list();
         const listElement = document.getElementById('published-list');
         if (result.success && result.data.length > 0) {
             let html = '<div class="published-grid">';
