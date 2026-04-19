@@ -1,0 +1,204 @@
+/* Agent动态流程可视化样式 */
+
+.agent-flow {
+  padding: 8px 0;
+}
+
+.dflow-timeline {
+  display: flex;
+  align-items: flex-start;
+  gap: 0;
+  padding: 16px 0;
+  overflow-x: auto;
+}
+
+.dflow-step {
+  display: flex;
+  align-items: flex-start;
+  flex-shrink: 0;
+}
+
+.dflow-node {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 12px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+  min-width: 80px;
+  position: relative;
+}
+
+.dflow-node:hover {
+  transform: translateY(-2px);
+}
+
+.dflow-node-pending {
+  border: 2px dashed #4b5563;
+  background: transparent;
+  opacity: 0.5;
+}
+
+.dflow-node-running {
+  border: 2px solid #10b981;
+  background: rgba(16, 185, 129, 0.1);
+  animation: dflowPulse 2s ease-in-out infinite;
+}
+
+.dflow-node-completed {
+  border: 2px solid #10b981;
+  background: rgba(16, 185, 129, 0.15);
+}
+
+.dflow-node-failed {
+  border: 2px solid #ef4444;
+  background: rgba(239, 68, 68, 0.1);
+}
+
+@keyframes dflowPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4); }
+  50% { box-shadow: 0 0 0 8px rgba(16, 185, 129, 0); }
+}
+
+.dflow-node-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+
+.dflow-icon { font-size: 20px; }
+.dflow-status-icon { font-size: 12px; }
+
+.dflow-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #e5e7eb;
+  white-space: nowrap;
+}
+
+.dflow-count {
+  font-size: 11px;
+  color: #10b981;
+  font-weight: 600;
+  margin-top: 2px;
+}
+
+.dflow-connector {
+  width: 32px;
+  height: 2px;
+  background: #4b5563;
+  margin-top: 24px;
+  flex-shrink: 0;
+}
+
+.dflow-connector.done { background: #10b981; }
+
+.dflow-connector.active {
+  background: linear-gradient(90deg, #10b981, #4b5563);
+}
+
+.dflow-tasks {
+  margin-top: 8px;
+  width: 280px;
+  max-height: 300px;
+  overflow-y: auto;
+  border: 1px solid #333;
+  border-radius: 6px;
+  background: #111;
+}
+
+.dflow-task {
+  padding: 8px 12px;
+  border-bottom: 1px solid #222;
+  font-size: 12px;
+}
+
+.dflow-task:last-child { border-bottom: none; }
+.dflow-task-failed { border-left: 3px solid #ef4444; }
+
+.dflow-task-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dflow-task-name {
+  flex: 1;
+  color: #d1d5db;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dflow-task-duration {
+  color: #6b7280;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.dflow-task-output {
+  color: #9ca3af;
+  font-size: 11px;
+  margin-top: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dflow-task-error {
+  color: #ef4444;
+  font-size: 11px;
+  margin-top: 4px;
+}
+
+.dflow-task-llm {
+  color: #10b981;
+  font-size: 11px;
+  margin-top: 4px;
+  cursor: pointer;
+}
+
+.dflow-task-llm:hover { text-decoration: underline; }
+
+/* 决策节点（菱形） */
+.dflow-decision {
+  width: 28px;
+  height: 28px;
+  transform: rotate(45deg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  margin-top: 12px;
+  transition: all 0.2s;
+}
+
+.dflow-decision:hover {
+  transform: rotate(45deg) scale(1.2);
+}
+
+.dflow-decision-icon {
+  transform: rotate(-45deg);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.dflow-decision-pass {
+  border: 2px solid #10b981;
+  background: rgba(16, 185, 129, 0.15);
+}
+
+.dflow-decision-pass .dflow-decision-icon {
+  color: #10b981;
+}
+
+.dflow-decision-adjust {
+  border: 2px solid #f59e0b;
+  background: rgba(245, 158, 11, 0.15);
+}
+
+.dflow-decision-adjust .dflow-decision-icon {
+  color: #f59e0b;
+}

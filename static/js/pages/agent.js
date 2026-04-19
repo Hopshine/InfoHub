@@ -1,19 +1,19 @@
 const AgentPage = (() => {
   let statusTimer = null;
-  let currentHistoryTab = 'published';
+  let currentHistoryTab = 'approved';
   let articles = [];
   let historyArticles = [];
   let prompts = [];
   let scheduleRunning = false;
 
   const PIPELINE_STEPS = [
-    { key: 'fetch', label: '抓取', icon: '📡' },
-    { key: 'filter', label: '筛选', icon: '🔍' },
+    { key: 'scan', label: '扫描', icon: '📡' },
+    { key: 'evaluate', label: '评估', icon: '🔍' },
+    { key: 'collect', label: '采集', icon: '📥' },
     { key: 'analyze', label: '分析', icon: '🧠' },
-    { key: 'generate', label: '生成', icon: '✍️' },
-    { key: 'review', label: '审核', icon: '👁️' },
-    { key: 'format', label: '排版', icon: '📐' },
-    { key: 'publish', label: '发布', icon: '📤' }
+    { key: 'plan', label: '策划', icon: '💡' },
+    { key: 'write', label: '生成', icon: '✍️' },
+    { key: 'check', label: '检查', icon: '👁️' }
   ];
 
   function render() {
@@ -44,7 +44,7 @@ const AgentPage = (() => {
             </div>
             <div class="agent-stats-summary" id="agent-stats-summary"></div>
           </div>
-          <div class="agent-pipeline" id="agent-pipeline"></div>
+          <div id="agent-dag-container" class="agent-dag-container"></div>
         </div>
 
         <div class="agent-section">
@@ -60,7 +60,8 @@ const AgentPage = (() => {
           <div class="agent-section-header">
             <h3>历史记录</h3>
             <div class="agent-tabs">
-              <button class="agent-tab active" onclick="AgentPage.switchHistory('published')">已发布</button>
+              <button class="agent-tab active" onclick="AgentPage.switchHistory('approved')">已通过</button>
+              <button class="agent-tab" onclick="AgentPage.switchHistory('published')">已发布</button>
               <button class="agent-tab" onclick="AgentPage.switchHistory('rejected')">已拒绝</button>
               <button class="agent-tab" onclick="AgentPage.switchHistory('all')">全部</button>
             </div>
@@ -69,6 +70,8 @@ const AgentPage = (() => {
         </div>
       </div>
 
+      <div id="agent-detail-panel" class="agent-detail-panel"></div>
+
       <div id="agent-settings-modal" style="display:none;"></div>
       <div id="agent-preview-modal" style="display:none;"></div>
     `;
@@ -76,6 +79,9 @@ const AgentPage = (() => {
 
   async function init() {
     await Promise.all([loadStatus(), loadDrafts(), loadHistory(), loadScheduleStatus()]);
+    if (typeof AgentDetailPanel !== 'undefined') {
+      AgentDetailPanel.init();
+    }
   }
 
   function startPolling() {
@@ -94,12 +100,33 @@ const AgentPage = (() => {
 
   async function loadStatus() {
     try {
-      const resp = await fetch('/api/agent/status');
+      const resp = await fetch('/api/agent/status/detailed');
       const data = await resp.json();
       if (data.success) {
+        window._lastAgentData = data.data;
         renderStatus(data.data);
-        if (data.data.status === 'running') {
+
+        // 统计摘要
+        const statsSummary = document.getElementById('agent-stats-summary');
+        if (statsSummary && typeof AgentFlowVisualizer !== 'undefined') {
+          AgentFlowVisualizer.renderStatsSummary(statsSummary, data.data);
+        }
+
+        // DAG可视化 - 需要workflows数据
+        if (data.data.batch_id) {
+          const workflowResp = await fetch(`/api/agent/workflows/${data.data.batch_id}`);
+          const workflowData = await workflowResp.json();
+          if (workflowData.success) {
+            const dagContainer = document.getElementById('agent-dag-container');
+            if (dagContainer && typeof AgentDAGVisualizer !== 'undefined') {
+              AgentDAGVisualizer.render(dagContainer, workflowData.data);
+            }
+          }
+        }
+
+        if (data.data.running) {
           if (!statusTimer) startPolling();
+          await loadDrafts();
         } else {
           stopPolling();
         }
@@ -112,49 +139,16 @@ const AgentPage = (() => {
   function renderStatus(data) {
     const lastRun = document.getElementById('agent-last-run');
     const curStatus = document.getElementById('agent-current-status');
-    const summary = document.getElementById('agent-stats-summary');
 
     if (lastRun) {
-      lastRun.textContent = data.last_run
-        ? new Date(data.last_run).toLocaleString('zh-CN')
+      lastRun.textContent = data.started_at
+        ? new Date(data.started_at).toLocaleString('zh-CN')
         : '从未运行';
     }
     if (curStatus) {
-      curStatus.textContent = data.status === 'running' ? '运行中' : '空闲';
-      curStatus.style.color = data.status === 'running' ? 'var(--color-primary)' : '';
+      curStatus.textContent = data.running ? '运行中' : '空闲';
+      curStatus.style.color = data.running ? 'var(--color-primary)' : '';
     }
-    if (summary && data.stats) {
-      const s = data.stats;
-      summary.innerHTML = `
-        <span>扫描 <strong>${s.scanned || 0}</strong> 条</span>
-        <span>筛选 <strong>${s.filtered || 0}</strong> 条</span>
-        <span>生成 <strong>${s.generated || 0}</strong> 篇</span>
-      `;
-    }
-    renderPipeline(data.pipeline || []);
-  }
-
-  function renderPipeline(pipelineData) {
-    const container = document.getElementById('agent-pipeline');
-    if (!container) return;
-
-    const html = PIPELINE_STEPS.map((step, i) => {
-      const stepData = pipelineData.find(p => p.key === step.key) || {};
-      const state = stepData.state || 'pending';
-      const count = stepData.count != null ? stepData.count : '';
-      const arrow = i < PIPELINE_STEPS.length - 1
-        ? '<div class="pipeline-arrow">→</div>' : '';
-      return `
-        <div class="pipeline-node ${state}">
-          <div class="pipeline-icon">${step.icon}</div>
-          <div class="pipeline-label">${step.label}</div>
-          ${count !== '' ? `<div class="pipeline-count">${count}</div>` : ''}
-        </div>
-        ${arrow}
-      `;
-    }).join('');
-
-    container.innerHTML = html;
   }
 
   async function loadDrafts() {
@@ -183,13 +177,13 @@ const AgentPage = (() => {
     el.innerHTML = articles.map(a => {
       const scoreClass = a.quality_score >= 0.8 ? 'score-high'
         : a.quality_score >= 0.6 ? 'score-mid' : 'score-low';
-      const scoreText = a.quality_score != null ? (a.quality_score * 10).toFixed(1) : '--';
+      const scoreText = a.quality_score != null ? Math.round(a.quality_score * 100) : '--';
       return `
         <div class="agent-article-card">
           <div class="agent-article-title">${escapeHtml(a.title)}</div>
           <div class="agent-article-meta">
-            ${a.source_platform ? `<span>${escapeHtml(a.source_platform)}</span>` : ''}
-            <span class="agent-score ${scoreClass}">${scoreText}分</span>
+            ${a.platform ? `<span>${escapeHtml(a.platform)}</span>` : ''}
+            <span class="agent-score ${scoreClass}" onclick="AgentPage.showScoreDetail(${a.id})" style="cursor:pointer;" title="点击查看评分详情">${scoreText}分</span>
           </div>
           ${a.summary ? `<div class="agent-article-summary">${escapeHtml(a.summary)}</div>` : ''}
           <div class="agent-article-actions">
@@ -230,27 +224,72 @@ const AgentPage = (() => {
     }
 
     el.innerHTML = filtered.map(a => {
-      const badge = a.status === 'published'
-        ? '<span class="badge badge-published">已发布</span>'
-        : '<span class="badge badge-rejected">已拒绝</span>';
-      const time = a.updated_at ? new Date(a.updated_at).toLocaleString('zh-CN') : '';
+      let badge = '';
+      let actions = '';
+      let publishInfo = '';
+
+      if (a.status === 'published') {
+        const platformMap = {
+          'wechat': '微信公众号',
+          'xiaohongshu': '小红书',
+          'zhihu': '知乎',
+          'weibo': '微博'
+        };
+        const platformName = platformMap[a.publish_platform] || a.publish_platform || '未知平台';
+        badge = `<span class="badge badge-published">已发布 · ${platformName}</span>`;
+
+        publishInfo = a.publish_url ? `
+          <div style="margin-top:4px;">
+            <a href="${a.publish_url}" target="_blank" style="color:var(--color-primary);font-size:12px;text-decoration:none;">
+              查看发布链接 →
+            </a>
+          </div>
+        ` : '';
+
+        actions = `
+          <button class="btn btn-sm btn-secondary" onclick="AgentPage.preview(${a.id})">查看</button>
+          ${a.publish_url ? `<button class="btn btn-sm" onclick="window.open('${a.publish_url}', '_blank')">访问</button>` : ''}
+        `;
+      } else if (a.status === 'approved') {
+        badge = '<span class="badge badge-success">已通过</span>';
+        actions = `
+          <button class="btn btn-sm btn-secondary" onclick="AgentPage.preview(${a.id})">预览</button>
+          <button class="btn btn-sm btn-primary" onclick="AgentPage.publishArticle(${a.id})">发布</button>
+          <button class="btn btn-sm" onclick="AgentPage.revertToDraft(${a.id})">撤回</button>
+        `;
+      } else if (a.status === 'rejected') {
+        badge = '<span class="badge badge-rejected">已拒绝</span>';
+        actions = `
+          <button class="btn btn-sm btn-secondary" onclick="AgentPage.preview(${a.id})">查看</button>
+          <button class="btn btn-sm" onclick="AgentPage.revertToDraft(${a.id})">重新审核</button>
+        `;
+      }
+
+      const time = a.updated_at ? new Date(a.updated_at).toLocaleString('zh-CN') :
+                   (a.published_at ? new Date(a.published_at).toLocaleString('zh-CN') : '');
       return `
         <div class="agent-history-item">
-          <div>
-            <span style="font-weight:500;">${escapeHtml(a.title)}</span>
-            ${badge}
+          <div style="flex:1;">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+              <span style="font-weight:500;">${escapeHtml(a.title)}</span>
+              ${badge}
+            </div>
+            <span style="color:var(--color-gray-500);font-size:var(--font-size-xs);">${time}</span>
+            ${publishInfo}
           </div>
-          <span style="color:var(--color-gray-500);font-size:var(--font-size-xs);">${time}</span>
+          <div style="display:flex;gap:8px;">
+            ${actions}
+          </div>
         </div>
       `;
     }).join('');
   }
 
-  function switchHistory(tab) {
+  async function switchHistory(tab) {
     currentHistoryTab = tab;
     document.querySelectorAll('.agent-tabs .agent-tab').forEach(t => t.classList.remove('active'));
     event.target.classList.add('active');
-    renderHistory();
+    await loadHistory();
   }
 
   async function manualRun() {
@@ -313,10 +352,105 @@ const AgentPage = (() => {
 
   async function reviewArticle(id, action) {
     try {
+      // 转换action为后端期望的decision格式
+      const decision = action === 'approved' ? 'approve' : action === 'rejected' ? 'reject' : action;
       const resp = await fetch(`/api/agent/articles/${id}/review`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action })
+        body: JSON.stringify({ decision })
+      });
+      const data = await resp.json();
+      if (data.success) {
+        await Promise.all([loadDrafts(), loadHistory()]);
+      } else {
+        alert('操作失败: ' + (data.error || ''));
+      }
+    } catch (e) {
+      alert('操作失败: ' + e.message);
+    }
+  }
+
+  async function publishArticle(id) {
+    // 显示发布平台选择弹窗
+    const article = historyArticles.find(a => a.id === id);
+    if (!article) return;
+
+    const modal = document.createElement('div');
+    modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.8);display:flex;align-items:center;justify-content:center;z-index:10000;';
+    modal.innerHTML = `
+      <div style="background:#1a1a1a;border-radius:8px;padding:24px;max-width:500px;width:90%;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+          <h3 style="margin:0;">选择发布平台</h3>
+          <button onclick="this.closest('[style*=fixed]').remove()" style="background:none;border:none;color:#888;font-size:24px;cursor:pointer;">&times;</button>
+        </div>
+        <div style="margin-bottom:16px;">
+          <div style="font-weight:500;margin-bottom:8px;">文章标题</div>
+          <div style="color:#888;font-size:14px;">${escapeHtml(article.title)}</div>
+        </div>
+        <div style="margin-bottom:24px;">
+          <div style="font-weight:500;margin-bottom:12px;">发布到</div>
+          <div style="display:grid;gap:12px;">
+            <label style="display:flex;align-items:center;padding:12px;border:1px solid #333;border-radius:6px;cursor:pointer;">
+              <input type="radio" name="platform" value="wechat" checked style="margin-right:8px;">
+              <span>微信公众号</span>
+            </label>
+            <label style="display:flex;align-items:center;padding:12px;border:1px solid #333;border-radius:6px;cursor:pointer;">
+              <input type="radio" name="platform" value="xiaohongshu" style="margin-right:8px;">
+              <span>小红书</span>
+            </label>
+            <label style="display:flex;align-items:center;padding:12px;border:1px solid #333;border-radius:6px;cursor:pointer;">
+              <input type="radio" name="platform" value="zhihu" style="margin-right:8px;">
+              <span>知乎</span>
+            </label>
+            <label style="display:flex;align-items:center;padding:12px;border:1px solid #333;border-radius:6px;cursor:pointer;">
+              <input type="radio" name="platform" value="weibo" style="margin-right:8px;">
+              <span>微博</span>
+            </label>
+          </div>
+        </div>
+        <div style="display:flex;gap:12px;justify-content:flex-end;">
+          <button class="btn btn-secondary" onclick="this.closest('[style*=fixed]').remove()">取消</button>
+          <button class="btn btn-primary" onclick="AgentPage.confirmPublish(${id})">确认发布</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+    modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+  }
+
+  async function confirmPublish(id) {
+    const modal = document.querySelector('[style*="z-index:10000"]');
+    const platform = modal.querySelector('input[name="platform"]:checked')?.value;
+    if (!platform) {
+      alert('请选择发布平台');
+      return;
+    }
+
+    try {
+      const resp = await fetch(`/api/agent/articles/${id}/publish`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ platform })
+      });
+      const data = await resp.json();
+      if (data.success) {
+        modal.remove();
+        alert('发布成功！');
+        await loadHistory();
+      } else {
+        alert('发布失败: ' + (data.error || ''));
+      }
+    } catch (e) {
+      alert('发布失败: ' + e.message);
+    }
+  }
+
+  async function revertToDraft(id) {
+    if (!confirm('确认撤回到待审核状态？')) return;
+    try {
+      const resp = await fetch(`/api/agent/articles/${id}/revert`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
       });
       const data = await resp.json();
       if (data.success) {
@@ -540,6 +674,64 @@ const AgentPage = (() => {
     alert('调度间隔已设置为 ' + interval + ' 分钟');
   }
 
+  async function showScoreDetail(articleId) {
+    const article = articles.find(a => a.id === articleId);
+    if (!article || !article.quality_detail) {
+      alert('无评分详情');
+      return;
+    }
+
+    try {
+      const detail = typeof article.quality_detail === 'string'
+        ? JSON.parse(article.quality_detail)
+        : article.quality_detail;
+
+      const detailsHtml = detail.details.map(d => `
+        <div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #333;">
+          <span>${d.item}</span>
+          <span style="color:${d.score >= 15 ? '#10b981' : d.score >= 8 ? '#f59e0b' : '#ef4444'};">${d.score}分</span>
+        </div>
+        <div style="color:#888;font-size:12px;padding:4px 0 8px 0;">${d.reason}</div>
+      `).join('');
+
+      const metricsHtml = `
+        <div style="margin-top:16px;padding-top:16px;border-top:1px solid #333;">
+          <div style="font-weight:600;margin-bottom:8px;">指标统计</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:13px;">
+            <div>标题长度: ${detail.metrics.title_length}字</div>
+            <div>内容长度: ${detail.metrics.content_length}字</div>
+            <div>段落数: ${detail.metrics.paragraph_count}段</div>
+            <div>关键词数: ${detail.metrics.keyword_count}个</div>
+            <div>摘要长度: ${detail.metrics.summary_length}字</div>
+            <div>句子数: ${detail.metrics.sentence_count || 0}句</div>
+          </div>
+        </div>
+      `;
+
+      const modal = document.createElement('div');
+      modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.8);display:flex;align-items:center;justify-content:center;z-index:10000;';
+      modal.innerHTML = `
+        <div style="background:#1a1a1a;border-radius:8px;padding:24px;max-width:600px;width:90%;max-height:80vh;overflow-y:auto;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+            <h3 style="margin:0;">质量评分详情</h3>
+            <button onclick="this.closest('[style*=fixed]').remove()" style="background:none;border:none;color:#888;font-size:24px;cursor:pointer;">&times;</button>
+          </div>
+          <div style="font-size:32px;font-weight:700;color:#10b981;text-align:center;margin:16px 0;">
+            ${Math.round(detail.final_score * 100)}分
+          </div>
+          <div style="text-align:center;color:#888;margin-bottom:24px;">总分: ${detail.total_score}/100</div>
+          ${detailsHtml}
+          ${metricsHtml}
+        </div>
+      `;
+      document.body.appendChild(modal);
+      modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+    } catch (e) {
+      console.error('解析评分详情失败:', e);
+      alert('评分详情格式错误');
+    }
+  }
+
   function escapeHtml(text) {
     if (!text) return '';
     const div = document.createElement('div');
@@ -561,7 +753,9 @@ const AgentPage = (() => {
     switchPreviewTab, closePreview,
     openSettings, closeSettings,
     showPromptForm, editPrompt, savePrompt,
-    deletePrompt, activatePrompt, saveSchedule
+    deletePrompt, activatePrompt, saveSchedule,
+    showScoreDetail, publishArticle, revertToDraft,
+    confirmPublish
   };
 })();
 
