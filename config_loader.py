@@ -74,7 +74,7 @@ class LLMConfigLoader:
     @classmethod
     def _fallback_config(cls, function_key: str) -> Dict:
         """回退到config.py环境变量"""
-        model = Config.ANALYSIS_MODEL if function_key == 'content_analysis' else Config.ARTICLE_MODEL
+        model = Config.ANALYSIS_MODEL if function_key in ('content_analysis', 'topic_evaluation') else Config.ARTICLE_MODEL
         return {
             'provider_type': Config.LLM_PROVIDER,
             'api_key': Config.LLM_API_KEY,

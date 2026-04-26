@@ -2,9 +2,12 @@
 微信公众号发布器 - 通过官方API发布文章到微信公众号
 支持：草稿箱发布、直接发布、素材上传
 """
+import os
 import time
 import json
 import requests
+import asyncio
+import aiohttp
 from typing import Dict, Optional, List
 from datetime import datetime
 from utils.logger import setup_logger
@@ -18,9 +21,10 @@ class WeChatPublisher:
 
     BASE_URL = 'https://api.weixin.qq.com/cgi-bin'
 
-    def __init__(self, app_id: str = None, app_secret: str = None):
+    def __init__(self, app_id: str = None, app_secret: str = None, db=None):
         self.app_id = app_id or Config.WECHAT_APP_ID
         self.app_secret = app_secret or Config.WECHAT_APP_SECRET
+        self.db = db
         self._access_token = None
         self._token_expires_at = 0
         self.max_retries = 3
@@ -105,6 +109,132 @@ class WeChatPublisher:
             logger.error(f"图片文件不存在: {image_path}")
             return None
 
+    def upload_image_with_cache(self, image_path: str) -> Optional[Dict]:
+        """上传图片并使用缓存（返回url和media_id）"""
+        if not self.db:
+            return self._upload_image_direct(image_path)
+
+        # 先尝试从缓存获取
+        cache = self.db.get_wechat_media_cache(image_path)
+        if cache:
+            logger.info(f"使用缓存的图片: {image_path}")
+            return {'url': cache['url'], 'media_id': cache['media_id']}
+
+        # 缓存未命中，上传图片
+        result = self._upload_image_direct(image_path)
+        if result and result.get('url'):
+            # 保存到缓存
+            self.db.save_wechat_media_cache(image_path, result['media_id'])
+        return result
+
+    def _upload_image_direct(self, image_path: str) -> Optional[Dict]:
+        """直接上传图片（内部方法）"""
+        token = self._get_access_token()
+        url = f'{self.BASE_URL}/media/uploadimg?access_token={token}'
+
+        try:
+            with open(image_path, 'rb') as f:
+                files = {'media': f}
+                data = self._request_with_retry('POST', url, files=files)
+
+            if data.get('url'):
+                logger.info(f"图片上传成功: {data['url']}")
+                return {'url': data['url'], 'media_id': data.get('media_id', '')}
+            return None
+        except FileNotFoundError:
+            logger.error(f"图片文件不存在: {image_path}")
+            return None
+
+    async def _upload_image_async(self, session: aiohttp.ClientSession,
+                                   image_path: str, token: str) -> Dict:
+        """异步上传单张图片"""
+        url = f'{self.BASE_URL}/media/uploadimg?access_token={token}'
+        try:
+            with open(image_path, 'rb') as f:
+                data = aiohttp.FormData()
+                data.add_field('media', f, filename=image_path.split('/')[-1])
+                async with session.post(url, data=data, timeout=30) as resp:
+                    result = await resp.json()
+                    if result.get('url'):
+                        return {
+                            'success': True,
+                            'path': image_path,
+                            'url': result['url'],
+                            'media_id': result.get('media_id', '')
+                        }
+                    return {
+                        'success': False,
+                        'path': image_path,
+                        'error': result.get('errmsg', 'Unknown error')
+                    }
+        except Exception as e:
+            return {'success': False, 'path': image_path, 'error': str(e)}
+
+    def upload_images_batch(self, image_paths: List[str],
+                           use_cache: bool = True) -> List[Dict]:
+        """批量上传图片（并发上传，支持缓存）
+
+        Args:
+            image_paths: 图片路径列表
+            use_cache: 是否使用缓存
+
+        Returns:
+            上传结果列表，每项包含success、path、url、media_id等字段
+        """
+        if not image_paths:
+            return []
+
+        results = []
+        to_upload = []
+
+        # 检查缓存
+        if use_cache and self.db:
+            for path in image_paths:
+                cache = self.db.get_wechat_media_cache(path)
+                if cache:
+                    results.append({
+                        'success': True,
+                        'path': path,
+                        'url': cache['url'],
+                        'media_id': cache['media_id'],
+                        'from_cache': True
+                    })
+                else:
+                    to_upload.append(path)
+        else:
+            to_upload = image_paths
+
+        # 并发上传未缓存的图片
+        if to_upload:
+            token = self._get_access_token()
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                upload_results = loop.run_until_complete(
+                    self._batch_upload_async(to_upload, token)
+                )
+                results.extend(upload_results)
+
+                # 保存成功上传的到缓存
+                if use_cache and self.db:
+                    for r in upload_results:
+                        if r['success']:
+                            self.db.save_wechat_media_cache(r['path'], r['media_id'])
+            finally:
+                loop.close()
+
+        return results
+
+    async def _batch_upload_async(self, image_paths: List[str],
+                                   token: str) -> List[Dict]:
+        """异步批量上传"""
+        async with aiohttp.ClientSession() as session:
+            tasks = [
+                self._upload_image_async(session, path, token)
+                for path in image_paths
+            ]
+            return await asyncio.gather(*tasks)
+
     def upload_thumb(self, image_path: str) -> Optional[str]:
         """上传封面图（永久素材），返回thumb_media_id"""
         token = self._get_access_token()
@@ -125,9 +255,14 @@ class WeChatPublisher:
 
     def _build_article_item(self, article: Dict, thumb_media_id: str = '') -> Dict:
         """构建文章数据结构"""
+        title = article.get('title', '')
+        # 微信标题限制64个字符
+        if len(title) > 64:
+            title = title[:64]
+
         return {
-            'title': article.get('title', ''),
-            'thumb_media_id': thumb_media_id,
+            'title': title,
+            'thumb_media_id': thumb_media_id,  # 必填字段
             'author': article.get('author', 'InfoHub'),
             'digest': article.get('summary', '')[:120],
             'content': article.get('content', ''),
@@ -142,7 +277,7 @@ class WeChatPublisher:
 
         Args:
             articles: 文章列表，每篇包含title/content/summary等字段
-            thumb_media_id: 封面图media_id，为空则不设置封面
+            thumb_media_id: 封面图media_id，为空则使用默认封面
 
         Returns:
             media_id: 草稿的media_id，失败返回None
@@ -150,11 +285,23 @@ class WeChatPublisher:
         token = self._get_access_token()
         url = f'{self.BASE_URL}/draft/add?access_token={token}'
 
+        # 如果没有提供封面图，上传默认封面
+        if not thumb_media_id:
+            default_cover = 'static/uploads/wechat/default_cover.jpg'
+            if os.path.exists(default_cover):
+                thumb_media_id = self.upload_thumb(default_cover)
+                if not thumb_media_id:
+                    logger.warning("默认封面图上传失败，尝试继续创建草稿")
+
         article_items = [
             self._build_article_item(a, thumb_media_id) for a in articles
         ]
 
         payload = {'articles': article_items}
+
+        # 调试：打印payload
+        logger.info(f"创建草稿payload: {json.dumps(payload, ensure_ascii=False)[:500]}")
+
         data = self._request_with_retry('POST', url, json=payload)
 
         media_id = data.get('media_id')
@@ -270,3 +417,81 @@ class WeChatPublisher:
                     db.update_generated_article_status(article_id, 'submitted')
         except Exception as e:
             logger.error(f"保存发布记录失败: {e}")
+
+    def publish_collection(self, collection_id: int, db,
+                          publish_now: bool = False) -> Dict:
+        """发布文章合集
+
+        Args:
+            collection_id: 合集ID
+            db: 数据库实例
+            publish_now: 是否立即群发
+
+        Returns:
+            发布结果字典
+        """
+        result = {
+            'collection_id': collection_id,
+            'status': 'pending',
+            'media_id': '',
+            'publish_id': '',
+            'message': '',
+            'articles_count': 0
+        }
+
+        try:
+            # 1. 获取合集信息
+            collection = db.get_article_collection(collection_id)
+            if not collection:
+                result['status'] = 'failed'
+                result['message'] = '合集不存在'
+                return result
+
+            # 2. 获取文章列表
+            article_ids = json.loads(collection['article_ids'])
+            articles = []
+            for aid in article_ids:
+                article = db.get_generated_article_by_id(aid)
+                if article:
+                    articles.append(article)
+
+            if not articles:
+                result['status'] = 'failed'
+                result['message'] = '合集中没有有效文章'
+                return result
+
+            result['articles_count'] = len(articles)
+
+            # 3. 创建草稿（多图文消息）
+            media_id = self.add_draft(articles)
+            if not media_id:
+                result['status'] = 'failed'
+                result['message'] = '创建草稿失败'
+                return result
+
+            result['media_id'] = media_id
+            result['status'] = 'draft'
+            result['message'] = f'草稿创建成功，包含{len(articles)}篇文章'
+
+            # 4. 如果需要立即发布
+            if publish_now:
+                publish_id = self.publish_draft(media_id)
+                if publish_id:
+                    result['status'] = 'published'
+                    result['publish_id'] = publish_id
+                    result['message'] = f'发布成功，包含{len(articles)}篇文章'
+                else:
+                    result['message'] = '草稿已创建，但发布失败'
+
+            # 5. 更新合集状态
+            db.update_article_collection(collection_id, {
+                'status': 'published' if publish_now else 'submitted'
+            })
+
+            return result
+
+        except Exception as e:
+            logger.error(f"合集发布异常: {e}")
+            result['status'] = 'failed'
+            result['message'] = str(e)
+            return result

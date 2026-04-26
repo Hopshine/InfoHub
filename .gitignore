@@ -9,3 +9,5 @@ reports/
 .idea/
 *.swp
 *.swo
+models/
+data/

@@ -243,15 +243,15 @@ class HotNewsArticleCollector:
         return articles
 
     def collect_and_save(self, db, hotnews_list: List[Dict],
-                         analyze: bool = True,
+                         analyze: bool = False,
                          max_workers: int = None) -> Dict:
         """
-        采集热点文章并保存到数据库，可选自动分析（支持多线程并发）
+        采集热点文章并保存到数据库（默认不自动分析）
 
         Args:
             db: 数据库实例
             hotnews_list: 热点新闻列表
-            analyze: 是否自动进行分析分类
+            analyze: 是否自动进行分析分类（默认False，采集和分析分离）
             max_workers: 最大并发线程数，None则使用配置文件中的值
 
         Returns:

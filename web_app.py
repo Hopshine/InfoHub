@@ -7,6 +7,7 @@ import threading
 import asyncio
 import uuid
 from datetime import datetime
+from werkzeug.utils import secure_filename
 
 # 添加项目路径
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -50,7 +51,34 @@ trending_scheduler.start()
 
 # 初始化文章生成器和发布器
 article_generator = ArticleGenerator()
-wechat_publisher = WeChatPublisher()
+
+# 微信发布器延迟初始化（使用时从数据库读取账号配置）
+def get_wechat_publisher():
+    """获取微信发布器实例，从数据库读取账号配置"""
+    accounts = db.get_wechat_accounts()
+
+    # 优先使用默认账号
+    default_account = next((acc for acc in accounts if acc.get('is_default') == 1), None)
+    if default_account:
+        return WeChatPublisher(
+            app_id=default_account['app_id'],
+            app_secret=default_account['app_secret'],
+            db=db
+        )
+
+    # 如果没有默认账号，使用第一个活跃账号
+    active_accounts = [acc for acc in accounts if acc.get('is_active') == 1]
+    if active_accounts:
+        account = active_accounts[0]
+        return WeChatPublisher(
+            app_id=account['app_id'],
+            app_secret=account['app_secret'],
+            db=db
+        )
+
+    # 最后回退到环境变量
+    return WeChatPublisher(db=db)
+
 hotnews_article_collector = HotNewsArticleCollector()
 workflow_manager = WorkflowManager(db, db_path)
 
@@ -643,7 +671,7 @@ def collect_trending_articles():
         trending_ids = data.get('ids', [])
         platform = data.get('platform')
         limit = data.get('limit', 10)
-        analyze = data.get('analyze', True)
+        analyze = data.get('analyze', False)  # 默认不自动分析，采集和分析分开
 
         # 获取热点列表
         if trending_ids:
@@ -693,24 +721,44 @@ def generate_articles():
 
         # 获取待生成的热点
         if hotnews_ids:
-            news_list = [db.get_hotnews_by_id(nid) for nid in hotnews_ids]
+            news_list = [db.get_trending_by_id(nid) for nid in hotnews_ids]
             news_list = [n for n in news_list if n]
         else:
             news_list = db.get_latest_trending(limit=count)
 
+        if not news_list:
+            return jsonify({'success': False, 'error': '没有找到热点数据'})
+
         results = []
         llm_config = LLMConfigLoader.get_config(db, 'article_generation')
         generator = ArticleGenerator(config=llm_config)
+
         for news in news_list[:count]:
             article_id = generator.generate_and_save(db, news, style)
             if article_id:
                 results.append({'hotnews_id': news.get('id'), 'article_id': article_id})
+
+        # 如果是单篇生成，返回文章详情
+        if len(results) == 1 and results[0]['article_id']:
+            article = db.get_generated_article_by_id(results[0]['article_id'])
+            if article:
+                return jsonify({
+                    'success': True,
+                    'data': {
+                        'generated': 1,
+                        'article_id': article['id'],
+                        'title': article['title'],
+                        'content': article['content'],
+                        'summary': article.get('summary', ''),
+                    }
+                })
 
         return jsonify({
             'success': True,
             'data': {'generated': len(results), 'articles': results}
         })
     except Exception as e:
+        logger.error(f"文章生成失败: {e}")
         return jsonify({'success': False, 'error': str(e)})
 
 
@@ -726,11 +774,12 @@ def publish_articles():
             return jsonify({'success': False, 'error': '请选择要发布的文章'})
 
         results = []
+        publisher = get_wechat_publisher()
         for article_id in article_ids:
             article = db.get_generated_article_by_id(article_id)
             if not article:
                 continue
-            result = wechat_publisher.publish_article(article, db, publish_type)
+            result = publisher.publish_article(article, db, publish_type)
             results.append(result)
 
         return jsonify({
@@ -763,6 +812,7 @@ def get_draft(draft_id):
                     'id': article['id'],
                     'title': article['title'],
                     'content': article['content'],
+                    'content_wechat': article.get('content_wechat', article['content']),
                     'updated_at': article.get('updated_at', article.get('created_at'))
                 }
             })
@@ -779,6 +829,7 @@ def create_draft():
         article_data = {
             'title': data.get('title', ''),
             'content': data.get('content', ''),
+            'content_wechat': data.get('content_wechat', data.get('content', '')),
             'status': 'draft'
         }
         article_id = db.insert_generated_article(article_data)
@@ -790,6 +841,7 @@ def create_draft():
                     'id': article['id'],
                     'title': article['title'],
                     'content': article['content'],
+                    'content_wechat': article.get('content_wechat', article['content']),
                     'updated_at': article.get('updated_at', article.get('created_at'))
                 }
             })
@@ -807,6 +859,9 @@ def update_draft(draft_id):
             'title': data.get('title', ''),
             'content': data.get('content', '')
         }
+        if 'content_wechat' in data:
+            update_data['content_wechat'] = data['content_wechat']
+
         if db.update_generated_article(draft_id, update_data):
             article = db.get_generated_article_by_id(draft_id)
             return jsonify({
@@ -815,6 +870,7 @@ def update_draft(draft_id):
                     'id': article['id'],
                     'title': article['title'],
                     'content': article['content'],
+                    'content_wechat': article.get('content_wechat', article['content']),
                     'updated_at': article.get('updated_at', article.get('created_at'))
                 }
             })
@@ -1175,22 +1231,96 @@ def _flush_llm_logs(llm_logger):
 # ==================== Async Task Functions ====================
 
 async def scan_platform_async(platform, llm_logger):
-    items = await asyncio.to_thread(db.get_latest_trending, platform)
-    return items or []
+    """扫描平台热点 - 实际采集新数据"""
+    from collector.trending_collector import TrendingCollector
 
+    collector = TrendingCollector()
 
-async def evaluate_topic_async(topic, batch_id, llm_logger):
-    task_data = {
-        'task_type': 'evaluate',
-        'stage': 'evaluate',
-        'task_key': f"eval_{topic.get('id', '')}",
-        'task_name': topic.get('title', ''),
-        'status': 'completed',
-        'input_data': json.dumps({'title': topic.get('title', '')}, ensure_ascii=False),
-        'output_data': json.dumps({'selected': True}, ensure_ascii=False),
-        'batch_id': batch_id,
+    # 根据平台调用对应的采集方法
+    if platform == 'weibo':
+        items = await asyncio.to_thread(collector.collect_weibo)
+    elif platform == 'zhihu':
+        items = await asyncio.to_thread(collector.collect_zhihu)
+    elif platform == 'baidu':
+        items = await asyncio.to_thread(collector.collect_baidu)
+    elif platform == 'douyin':
+        items = await asyncio.to_thread(collector.collect_douyin)
+    else:
+        items = []
+
+    # 存储到数据库（防重复）
+    saved_count = 0
+    if items:
+        for item in items:
+            try:
+                # 检查是否已存在（根据平台+标题）
+                existing = db.get_trending_by_title(platform, item.get('title', ''))
+                if not existing:
+                    # 添加平台字段
+                    item['platform'] = platform
+                    db.save_trending_item(item)
+                    saved_count += 1
+            except Exception as e:
+                logger.error(f"保存热点失败: {e}")
+                continue
+
+    return {
+        'platform': platform,
+        'count': len(items),
+        'saved': saved_count,
+        'items': items  # 返回所有采集的数据
     }
-    await asyncio.to_thread(db.create_agent_task, task_data)
+
+
+async def evaluate_topic_async(topic, batch_id, llm_logger, task_id):
+    """使用LLM进行多维度评估 - 结果持久化到trending表，防重复评估"""
+    from agent.topic_evaluator import TopicEvaluator
+
+    trending_id = topic.get('id')
+
+    # 防重复：检查是否已有评估结果
+    if trending_id:
+        cached = await asyncio.to_thread(db.get_trending_evaluation, trending_id)
+        if cached and cached.get('eval_result'):
+            result = cached['eval_result']
+            selected = result.get('selected', False)
+            logger.info(f"跳过已评估话题: {topic.get('title', '')[:30]} ({cached['eval_grade']}级)")
+
+            # 更新task记录为缓存结果
+            await asyncio.to_thread(db.update_agent_task, task_id, {
+                'status': 'completed' if selected else 'failed',
+                'output_data': json.dumps(result, ensure_ascii=False),
+                'completed_at': datetime.now().isoformat()
+            })
+
+            if not selected:
+                return None
+            topic['_eval_score'] = result.get('total_score', 0)
+            topic['_eval_grade'] = result.get('grade', 'C')
+            return topic
+
+    # 调用LLM评估
+    evaluator = TopicEvaluator(db)
+    result = await asyncio.to_thread(evaluator.evaluate, topic, llm_logger)
+
+    selected = result.get('selected', False)
+
+    # 持久化评估结果到trending表
+    if trending_id:
+        model_name = evaluator.config.get('model', 'unknown') if evaluator.config else 'unknown'
+        await asyncio.to_thread(db.save_trending_evaluation, trending_id, result, model_name)
+
+    # 更新task记录
+    await asyncio.to_thread(db.update_agent_task, task_id, {
+        'status': 'completed' if selected else 'failed',
+        'output_data': json.dumps(result, ensure_ascii=False),
+        'completed_at': datetime.now().isoformat()
+    })
+
+    if not selected:
+        return None
+    topic['_eval_score'] = result.get('total_score', 0)
+    topic['_eval_grade'] = result.get('grade', 'C')
     return topic
 
 
@@ -1404,6 +1534,7 @@ async def check_article_async(article, llm_logger):
 async def run_agent_pipeline_async(batch_id):
     """Async agent pipeline with WorkflowExecutor for parallel topic processing."""
     from agent.workflow_engine import WorkflowExecutor, compose_wechat_draft
+    from utils.ollama_checker import ensure_ollama_running
 
     try:
         agent_state['running'] = True
@@ -1411,6 +1542,9 @@ async def run_agent_pipeline_async(batch_id):
         agent_state['started_at'] = datetime.now().isoformat()
         agent_state['error'] = None
         _reset_nodes()
+
+        # 确保Ollama服务运行
+        await asyncio.to_thread(ensure_ollama_running)
 
         executor = ParallelExecutor(max_concurrency=5)
 
@@ -1423,6 +1557,17 @@ async def run_agent_pipeline_async(batch_id):
             tid = f"scan_{p}"
             _register_task(tid, 'scan', f'扫描{p}')
             _update_task(tid, 'running')
+
+            # 创建数据库任务记录
+            await asyncio.to_thread(db.create_agent_task, {
+                'task_key': tid,
+                'stage': 'scan',
+                'task_type': 'scan',
+                'task_name': p,  # 平台名称
+                'status': 'running',
+                'batch_id': batch_id
+            })
+
             llm_log = LLMLogger(tid, batch_id)
             scan_tasks.append({'fn': scan_platform_async, 'args': (p, llm_log), 'id': tid, '_logger': llm_log})
 
@@ -1430,48 +1575,109 @@ async def run_agent_pipeline_async(batch_id):
         trending = []
         completed_scan = 0
         for r in scan_results:
+            result = r.get('result', {})
+            platform = result.get('platform', 'unknown')
+            count = result.get('count', 0)
+            saved = result.get('saved', 0)
+            items = result.get('items', [])
+
+            # 更新任务状态，包含平台和数量信息
             _update_task(r['id'], 'completed' if not r['error'] else 'failed', r.get('error'))
-            if r['result']:
-                trending.extend(r['result'])
-            completed_scan += 1
+
+            # 存储扫描结果到task
+            if not r['error']:
+                await asyncio.to_thread(db.update_agent_task, r['id'], {
+                    'output_data': json.dumps({
+                        'platform': platform,
+                        'count': count,
+                        'saved': saved
+                    }, ensure_ascii=False)
+                })
+                trending.extend(items)
+                completed_scan += 1
         _update_stage('scan', 'completed', total=4, completed=completed_scan)
 
         if not trending:
-            trending = await asyncio.to_thread(db.get_latest_trending, None, 50)
+            trending = await asyncio.to_thread(db.get_latest_trending, None, 200)
         if not trending:
             _set_node('scan', 'completed', 0)
             agent_state['error'] = '无热点数据'
             agent_state['running'] = False
             return
+
+        # 去重（按标题）
+        seen_titles = set()
+        unique_trending = []
+        for item in trending:
+            title = item.get('title', '').strip()
+            if title and title not in seen_titles:
+                seen_titles.add(title)
+                unique_trending.append(item)
+        trending = unique_trending
+
+        # 按热度排序（高热度优先）
+        def get_hot_value(item):
+            try:
+                return int(str(item.get('hot_value', '0')).replace(',', '') or 0)
+            except:
+                return 0
+        trending.sort(key=get_hot_value, reverse=True)
+
         _set_node('scan', 'completed', len(trending))
+        logger.info(f"扫描完成: {len(trending)}条热点（去重后）")
 
         # 决策1: 扫描结果是否充足
         scan_ok = await decision_scan_sufficient(trending, agent_state)
         if not scan_ok:
             logger.warning(f"扫描结果不足，仅{len(trending)}条")
 
-        # ===== Stage 2: Evaluate (10 topics in parallel) =====
+        # ===== Stage 2: Evaluate (评估所有采集到的热点) =====
         _set_node('evaluate', 'running')
-        topics = trending[:10]
-        _update_stage('evaluate', 'running', total=len(topics))
+        topics_to_eval = trending  # 评估所有热点
+        _update_stage('evaluate', 'running', total=len(topics_to_eval))
         eval_tasks = []
-        for i, topic in enumerate(topics):
+        for i, topic in enumerate(topics_to_eval):
             tid = f"eval_{i}"
             _register_task(tid, 'evaluate', topic.get('title', '')[:30])
             _update_task(tid, 'running')
-            llm_log = LLMLogger(tid, batch_id)
-            eval_tasks.append({'fn': evaluate_topic_async, 'args': (topic, batch_id, llm_log), 'id': tid, '_logger': llm_log})
 
-        eval_executor = ParallelExecutor(max_concurrency=10)
+            # 预先创建数据库记录
+            await asyncio.to_thread(db.create_agent_task, {
+                'task_key': tid,
+                'stage': 'evaluate',
+                'task_type': 'evaluate',
+                'task_name': topic.get('title', '')[:60],
+                'status': 'running',
+                'input_data': json.dumps({
+                    'title': topic.get('title', ''),
+                    'platform': topic.get('platform', ''),
+                    'hot_value': str(topic.get('hot_value', ''))
+                }, ensure_ascii=False),
+                'batch_id': batch_id
+            })
+
+            llm_log = LLMLogger(tid, batch_id)
+            eval_tasks.append({'fn': evaluate_topic_async, 'args': (topic, batch_id, llm_log, tid), 'id': tid, '_logger': llm_log})
+
+        eval_executor = ParallelExecutor(max_concurrency=20)
         eval_results = await eval_executor.run(eval_tasks)
-        eval_ok = sum(1 for r in eval_results if not r['error'])
+
+        # 只保留通过评估的话题（result不为None）
+        selected_topics = []
+        eval_passed = 0
         for r in eval_results:
             _update_task(r['id'], 'completed' if not r['error'] else 'failed', r.get('error'))
-        _update_stage('evaluate', 'completed', total=len(topics), completed=eval_ok)
-        _set_node('evaluate', 'completed', eval_ok)
+            if r['result'] is not None:
+                selected_topics.append(r['result'])
+                eval_passed += 1
 
-        # 决策2: 筛选有价值的话题
-        topics = await decision_enough_valuable(topics, agent_state)
+        _update_stage('evaluate', 'completed', total=len(topics_to_eval), completed=eval_passed)
+        _set_node('evaluate', 'completed', eval_passed)
+
+        logger.info(f"Evaluation: {eval_passed}/{len(topics_to_eval)} topics selected")
+
+        # 决策2: 筛选有价值的话题（已在evaluate中完成）
+        topics = selected_topics
 
         # ===== Stage 3-7: WorkflowExecutor处理 (collect/analyze/plan/write/check) =====
         _set_node('collect', 'running')
@@ -1561,7 +1767,23 @@ def agent_status():
 
 @app.route('/api/agent/status/detailed')
 def agent_status_detailed():
-    """获取Agent详细运行状态（三层结构：stages/tasks/llm_logs + decisions）"""
+    """获取Agent详细运行状态"""
+    # 从数据库读取完整的task数据
+    tasks_data = {}
+    if agent_state.get('batch_id'):
+        try:
+            db_tasks = db.list_agent_tasks(batch_id=agent_state['batch_id'])
+            for task in db_tasks:
+                task_key = task.get('task_key', f"task_{task.get('id')}")
+                tasks_data[task_key] = task
+        except Exception as e:
+            logger.error(f"读取数据库tasks失败: {e}")
+
+    # 补充内存中还没写入数据库的task
+    for task_id, mem_task in agent_state.get('tasks', {}).items():
+        if task_id not in tasks_data:
+            tasks_data[task_id] = mem_task
+
     return jsonify({'success': True, 'data': {
         'running': agent_state['running'],
         'batch_id': agent_state['batch_id'],
@@ -1570,7 +1792,7 @@ def agent_status_detailed():
         'current_node': agent_state['current_node'],
         'nodes': agent_state['nodes'],
         'stages': agent_state.get('stages', {}),
-        'tasks': agent_state.get('tasks', {}),
+        'tasks': tasks_data,
         'llm_logs': agent_state.get('llm_logs', []),
         'decisions': agent_state.get('decisions', []),
         'articles_generated': agent_state['articles_generated'],
@@ -1667,6 +1889,15 @@ def agent_workflow_detail(workflow_id):
         transitions = db.get_workflow_transitions(workflow_id) if hasattr(db, 'get_workflow_transitions') else []
         workflow['transitions'] = transitions
 
+        # 获取LLM调用日志
+        llm_logs = []
+        if hasattr(db, 'get_agent_llm_logs'):
+            try:
+                llm_logs = db.get_agent_llm_logs(task_id=workflow_id)
+            except Exception as e:
+                logger.warning(f"Failed to get LLM logs: {e}")
+        workflow['llm_logs'] = llm_logs
+
         # 如果有关联文章，获取文章详情
         if workflow.get('article_id'):
             article = db.get_agent_article(workflow['article_id'])
@@ -1695,16 +1926,117 @@ def agent_articles():
     return jsonify({'success': True, 'data': articles})
 
 
+# ==================== Agent文章转草稿 ====================
+
+def markdown_to_wechat_html(md_text):
+    """Markdown转微信公众号HTML"""
+    import markdown as md_lib
+    import bleach
+    from bs4 import BeautifulSoup
+
+    if not md_text:
+        return ''
+
+    html = md_lib.markdown(md_text, extensions=[
+        'markdown.extensions.extra',
+        'markdown.extensions.toc'
+    ])
+
+    allowed_tags = [
+        'h1', 'h2', 'h3', 'h4', 'p', 'br', 'strong', 'em', 'b', 'i',
+        'u', 'a', 'img', 'ul', 'ol', 'li', 'blockquote', 'code', 'pre',
+        'table', 'thead', 'tbody', 'tr', 'th', 'td', 'hr', 'span', 'div'
+    ]
+    allowed_attrs = {
+        'a': ['href', 'title'],
+        'img': ['src', 'alt', 'title'],
+        'th': ['align'], 'td': ['align']
+    }
+    html = bleach.clean(html, tags=allowed_tags, attributes=allowed_attrs)
+
+    soup = BeautifulSoup(html, 'html.parser')
+    for tag in soup.find_all(['h1', 'h2']):
+        tag['style'] = 'font-size:20px;font-weight:bold;color:#333;margin:24px 0 12px;padding-bottom:8px;border-bottom:1px solid #eee;'
+    for tag in soup.find_all('h3'):
+        tag['style'] = 'font-size:17px;font-weight:bold;color:#333;margin:20px 0 10px;'
+    for tag in soup.find_all('p'):
+        tag['style'] = 'font-size:16px;line-height:1.8;color:#3f3f3f;margin:10px 0;'
+    for tag in soup.find_all('img'):
+        tag['style'] = 'max-width:100%;display:block;margin:15px auto;border-radius:4px;'
+    for tag in soup.find_all('blockquote'):
+        tag['style'] = 'border-left:3px solid #10b981;padding:10px 15px;margin:15px 0;background:#f8f9fa;color:#666;'
+    for tag in soup.find_all('strong'):
+        tag['style'] = 'color:#333;'
+
+    return str(soup)
+
+
+def convert_agent_to_draft(agent_article_id):
+    """将Agent文章转为创作中心草稿"""
+    article = db.get_agent_article(agent_article_id)
+    if not article:
+        raise Exception(f'Agent文章不存在: {agent_article_id}')
+
+    # 幂等检查
+    if article.get('draft_id'):
+        return article['draft_id']
+
+    content_md = article.get('content', '')
+    content_wechat = markdown_to_wechat_html(content_md)
+
+    draft_data = {
+        'title': article.get('title', ''),
+        'content': content_md,
+        'content_wechat': content_wechat,
+        'summary': article.get('summary', ''),
+        'keywords': article.get('keywords', ''),
+        'source_type': 'agent',
+        'source_id': agent_article_id,
+        'status': 'draft'
+    }
+    draft_id = db.insert_generated_article(draft_data)
+
+    if draft_id:
+        db.update_agent_article(agent_article_id, {'draft_id': draft_id})
+        logger.info(f"Agent文章 {agent_article_id} 已转为草稿 {draft_id}")
+
+    return draft_id
+
+
+@app.route('/api/agent/articles/<int:article_id>/convert', methods=['POST'])
+def agent_article_convert(article_id):
+    """手动将Agent文章转为创作中心草稿"""
+    try:
+        draft_id = convert_agent_to_draft(article_id)
+        if draft_id:
+            return jsonify({'success': True, 'data': {'draft_id': draft_id}})
+        return jsonify({'success': False, 'error': '转换失败'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
 @app.route('/api/agent/articles/<int:article_id>/review', methods=['POST'])
 def agent_article_review(article_id):
-    """审核推文"""
+    """审核推文 - 通过后自动转为创作中心草稿"""
     data = request.json or {}
     decision = data.get('decision')
     if decision not in ('approve', 'reject'):
         return jsonify({'success': False, 'error': 'decision必须是approve或reject'})
     new_status = 'approved' if decision == 'approve' else 'rejected'
     db.update_agent_article(article_id, {'status': new_status})
-    return jsonify({'success': True, 'data': {'status': new_status}})
+
+    # 审核通过时自动转为创作中心草稿
+    draft_id = None
+    if new_status == 'approved':
+        try:
+            draft_id = convert_agent_to_draft(article_id)
+        except Exception as e:
+            logger.error(f"Agent文章转草稿失败: {e}")
+
+    return jsonify({'success': True, 'data': {
+        'status': new_status,
+        'draft_id': draft_id
+    }})
 
 
 @app.route('/api/agent/articles/<int:article_id>/publish', methods=['POST'])
@@ -1842,7 +2174,396 @@ def agent_prompts_activate(prompt_id):
     return jsonify({'success': True})
 
 
-# ==================== 自动迁移环境变量配置 ====================
+@app.route('/api/agent/evaluation/prompt', methods=['GET'])
+def get_evaluation_prompt():
+    """获取当前评估提示词"""
+    from agent.topic_evaluator import TopicEvaluator
+    return jsonify({
+        'success': True,
+        'data': {
+            'system_prompt': TopicEvaluator.SYSTEM_PROMPT,
+            'evaluation_prompt': TopicEvaluator.EVALUATION_PROMPT
+        }
+    })
+
+
+@app.route('/api/agent/evaluation/feedback', methods=['POST'])
+def submit_evaluation_feedback():
+    """提交评估反馈，用于优化提示词"""
+    from agent.topic_evaluator import TopicEvaluator
+    data = request.json or {}
+    feedback = data.get('feedback', '')
+
+    evaluator = TopicEvaluator(db)
+    success = evaluator.optimize_prompt(feedback)
+
+    return jsonify({
+        'success': success,
+        'message': '反馈已收到，将用于优化评估模型'
+    })
+
+
+@app.route('/api/agent/evaluation/stats', methods=['GET'])
+def get_evaluation_stats():
+    """获取评估统计信息"""
+    try:
+        import sqlite3
+        conn = sqlite3.connect(db.db_path)
+        cursor = conn.cursor()
+
+        # 总评估数
+        cursor.execute('SELECT COUNT(*) FROM trending WHERE eval_at IS NOT NULL')
+        total = cursor.fetchone()[0]
+
+        # 通过/拒绝数
+        cursor.execute('SELECT COUNT(*) FROM trending WHERE eval_selected = 1')
+        passed = cursor.fetchone()[0]
+        cursor.execute('SELECT COUNT(*) FROM trending WHERE eval_selected = 0 AND eval_at IS NOT NULL')
+        rejected = cursor.fetchone()[0]
+
+        # 评级分布
+        cursor.execute('SELECT eval_grade, COUNT(*) FROM trending WHERE eval_grade IS NOT NULL GROUP BY eval_grade')
+        grade_dist = {row[0]: row[1] for row in cursor.fetchall()}
+
+        # 平均分
+        cursor.execute('SELECT AVG(eval_score) FROM trending WHERE eval_score IS NOT NULL')
+        avg_score = cursor.fetchone()[0] or 0
+
+        # 最近评估
+        cursor.execute('''
+            SELECT title, eval_score, eval_grade, eval_selected, eval_at
+            FROM trending
+            WHERE eval_at IS NOT NULL
+            ORDER BY eval_at DESC
+            LIMIT 10
+        ''')
+        recent = [{'title': r[0], 'score': r[1], 'grade': r[2], 'selected': bool(r[3]), 'eval_at': r[4]}
+                  for r in cursor.fetchall()]
+
+        conn.close()
+
+        return jsonify({
+            'success': True,
+            'data': {
+                'total': total,
+                'passed': passed,
+                'rejected': rejected,
+                'grade_distribution': grade_dist,
+                'average_score': round(avg_score, 1),
+                'recent_evaluations': recent
+            }
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+# ==================== 文章合集管理API ====================
+
+@app.route('/api/collections', methods=['GET'])
+def get_collections():
+    """获取合集列表"""
+    try:
+        status = request.args.get('status')
+        collections = db.get_article_collections(status=status)
+        return jsonify({'success': True, 'data': collections})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/collections', methods=['POST'])
+def create_collection():
+    """创建合集"""
+    try:
+        data = request.json or {}
+        article_ids = data.get('article_ids', [])
+
+        validation = db.validate_collection_articles(article_ids)
+        if not validation['valid']:
+            return jsonify({'success': False, 'error': validation['error']})
+
+        collection_data = {
+            'title': data.get('title', ''),
+            'description': data.get('description', ''),
+            'article_ids': article_ids,
+            'article_count': len(article_ids),
+            'cover_image': data.get('cover_image', ''),
+            'status': data.get('status', 'draft')
+        }
+        collection_id = db.create_article_collection(collection_data)
+        if collection_id:
+            return jsonify({'success': True, 'data': {'id': collection_id}})
+        return jsonify({'success': False, 'error': '创建失败'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/collections/<int:collection_id>', methods=['GET'])
+def get_collection(collection_id):
+    """获取合集详情"""
+    try:
+        collection = db.get_article_collection(collection_id)
+        if not collection:
+            return jsonify({'success': False, 'error': '合集不存在'})
+
+        article_ids = json.loads(collection.get('article_ids', '[]'))
+        articles = []
+        if article_ids:
+            for aid in article_ids:
+                article = db.get_generated_article_by_id(aid)
+                if article:
+                    articles.append(article)
+        collection['articles'] = articles
+
+        return jsonify({'success': True, 'data': collection})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/collections/<int:collection_id>', methods=['PUT'])
+def update_collection(collection_id):
+    """更新合集"""
+    try:
+        data = request.json or {}
+        collection = db.get_article_collection(collection_id)
+        if not collection:
+            return jsonify({'success': False, 'error': '合集不存在'})
+
+        # 如果更新article_ids，需要校验
+        if 'article_ids' in data:
+            validation = db.validate_collection_articles(data['article_ids'])
+            if not validation['valid']:
+                return jsonify({'success': False, 'error': validation['error']})
+            data['article_count'] = len(data['article_ids'])
+
+        if db.update_article_collection(collection_id, data):
+            return jsonify({'success': True})
+        return jsonify({'success': False, 'error': '更新失败'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/collections/<int:collection_id>', methods=['DELETE'])
+def delete_collection(collection_id):
+    """删除合集"""
+    try:
+        if db.delete_article_collection(collection_id):
+            return jsonify({'success': True})
+        return jsonify({'success': False, 'error': '合集不存在'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/collections/<int:collection_id>/preview', methods=['POST'])
+def preview_collection(collection_id):
+    """预览合集HTML"""
+    try:
+        collection = db.get_article_collection(collection_id)
+        if not collection:
+            return jsonify({'success': False, 'error': '合集不存在'})
+
+        article_ids = json.loads(collection.get('article_ids', '[]'))
+        if not article_ids:
+            return jsonify({'success': False, 'error': '合集中没有文章'})
+
+        articles = []
+        for aid in article_ids:
+            article = db.get_generated_article_by_id(aid)
+            if article:
+                articles.append(article)
+
+        if not articles:
+            return jsonify({'success': False, 'error': '未找到合集文章'})
+
+        # 生成合集HTML
+        html_parts = [
+            '<!DOCTYPE html>',
+            '<html><head><meta charset="utf-8">',
+            f'<title>{collection.get("title", "文章合集")}</title>',
+            '<style>',
+            'body{font-family:"PingFang SC","Microsoft YaHei",sans-serif;max-width:720px;margin:0 auto;padding:20px;line-height:1.8;color:#333}',
+            '.collection-header{text-align:center;padding:20px 0;border-bottom:2px solid #07c160;margin-bottom:30px}',
+            '.collection-title{font-size:24px;font-weight:bold;color:#07c160;margin-bottom:10px}',
+            '.collection-desc{font-size:14px;color:#666}',
+            '.article-item{margin-bottom:40px;padding-bottom:30px;border-bottom:1px dashed #ddd}',
+            '.article-item:last-child{border-bottom:none}',
+            '.article-index{display:inline-block;background:#07c160;color:#fff;padding:2px 10px;border-radius:4px;font-size:12px;margin-bottom:10px}',
+            '.article-title{font-size:20px;font-weight:bold;margin:10px 0 15px;color:#222}',
+            '.article-summary{font-size:14px;color:#888;margin-bottom:15px;padding:10px;background:#f7f7f7;border-left:3px solid #07c160}',
+            '.article-content{font-size:16px}',
+            '</style></head><body>',
+            '<div class="collection-header">',
+            f'<div class="collection-title">{collection.get("title", "文章合集")}</div>',
+        ]
+        if collection.get('description'):
+            html_parts.append(f'<div class="collection-desc">{collection["description"]}</div>')
+        html_parts.append('</div>')
+
+        for i, article in enumerate(articles, 1):
+            html_parts.append('<div class="article-item">')
+            html_parts.append(f'<span class="article-index">第 {i} 篇</span>')
+            html_parts.append(f'<div class="article-title">{article.get("title", "")}</div>')
+            if article.get('summary'):
+                html_parts.append(f'<div class="article-summary">{article["summary"]}</div>')
+            html_parts.append(f'<div class="article-content">{article.get("content", "")}</div>')
+            html_parts.append('</div>')
+
+        html_parts.append('</body></html>')
+        html = '\n'.join(html_parts)
+
+        return jsonify({'success': True, 'html': html})
+    except Exception as e:
+        logger.error(f"预览合集失败: {e}")
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/collections/stats', methods=['GET'])
+def get_collection_stats():
+    """获取合集统计信息"""
+    try:
+        stats = db.get_collection_stats()
+        return jsonify({'success': True, 'data': stats})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/collections/<int:collection_id>/articles', methods=['GET'])
+def get_collection_articles(collection_id):
+    """获取合集包含的所有文章完整信息"""
+    try:
+        collection = db.get_article_collection(collection_id)
+        if not collection:
+            return jsonify({'success': False, 'error': '合集不存在'})
+
+        article_ids = json.loads(collection.get('article_ids', '[]'))
+        articles = []
+        if article_ids:
+            for aid in article_ids:
+                article = db.get_generated_article_by_id(aid)
+                if article:
+                    articles.append(article)
+
+        return jsonify({'success': True, 'data': articles})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/collections/<int:collection_id>/reorder', methods=['PUT'])
+def reorder_collection(collection_id):
+    """重新排序合集文章"""
+    try:
+        data = request.json or {}
+        new_article_ids = data.get('article_ids', [])
+
+        collection = db.get_article_collection(collection_id)
+        if not collection:
+            return jsonify({'success': False, 'error': '合集不存在'})
+
+        old_article_ids = json.loads(collection.get('article_ids', '[]'))
+
+        # 验证新数组包含原有的所有文章ID
+        if set(new_article_ids) != set(old_article_ids):
+            return jsonify({'success': False, 'error': '新顺序必须包含原有的所有文章ID'})
+
+        # 更新顺序
+        if db.update_article_collection(collection_id, {'article_ids': new_article_ids}):
+            return jsonify({'success': True})
+        return jsonify({'success': False, 'error': '更新失败'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/collections/<int:collection_id>/export', methods=['GET'])
+def export_collection(collection_id):
+    """导出合集为完整HTML文件"""
+    try:
+        collection = db.get_article_collection(collection_id)
+        if not collection:
+            return jsonify({'success': False, 'error': '合集不存在'})
+
+        article_ids = json.loads(collection.get('article_ids', '[]'))
+        if not article_ids:
+            return jsonify({'success': False, 'error': '合集中没有文章'})
+
+        articles = []
+        for aid in article_ids:
+            article = db.get_generated_article_by_id(aid)
+            if article:
+                articles.append(article)
+
+        if not articles:
+            return jsonify({'success': False, 'error': '未找到合集文章'})
+
+        # 生成完整HTML
+        html_parts = [
+            '<!DOCTYPE html>',
+            '<html><head><meta charset="utf-8">',
+            f'<title>{collection.get("title", "文章合集")}</title>',
+            '<style>',
+            'body{font-family:"PingFang SC","Microsoft YaHei",sans-serif;max-width:720px;margin:0 auto;padding:20px;line-height:1.8;color:#333}',
+            '.collection-header{text-align:center;padding:20px 0;border-bottom:2px solid #07c160;margin-bottom:30px}',
+            '.collection-title{font-size:24px;font-weight:bold;color:#07c160;margin-bottom:10px}',
+            '.collection-desc{font-size:14px;color:#666}',
+            '.article-item{margin-bottom:40px;padding-bottom:30px;border-bottom:1px dashed #ddd}',
+            '.article-item:last-child{border-bottom:none}',
+            '.article-index{display:inline-block;background:#07c160;color:#fff;padding:2px 10px;border-radius:4px;font-size:12px;margin-bottom:10px}',
+            '.article-title{font-size:20px;font-weight:bold;margin:10px 0 15px;color:#222}',
+            '.article-summary{font-size:14px;color:#888;margin-bottom:15px;padding:10px;background:#f7f7f7;border-left:3px solid #07c160}',
+            '.article-content{font-size:16px}',
+            '</style></head><body>',
+            '<div class="collection-header">',
+            f'<div class="collection-title">{collection.get("title", "文章合集")}</div>',
+        ]
+        if collection.get('description'):
+            html_parts.append(f'<div class="collection-desc">{collection["description"]}</div>')
+        html_parts.append('</div>')
+
+        for i, article in enumerate(articles, 1):
+            html_parts.append('<div class="article-item">')
+            html_parts.append(f'<span class="article-index">第 {i} 篇</span>')
+            html_parts.append(f'<div class="article-title">{article.get("title", "")}</div>')
+            if article.get('summary'):
+                html_parts.append(f'<div class="article-summary">{article["summary"]}</div>')
+            html_parts.append(f'<div class="article-content">{article.get("content", "")}</div>')
+            html_parts.append('</div>')
+
+        html_parts.append('</body></html>')
+        html = '\n'.join(html_parts)
+
+        # 返回可下载的HTML文件
+        from flask import make_response
+        response = make_response(html)
+        response.headers['Content-Type'] = 'text/html; charset=utf-8'
+        response.headers['Content-Disposition'] = f'attachment; filename="{collection.get("title", "collection")}.html"'
+        return response
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/collections/<int:collection_id>/publish', methods=['POST'])
+def publish_collection(collection_id):
+    """发布文章合集到微信公众号"""
+    try:
+        data = request.json or {}
+        publish_now = data.get('publish_now', False)
+
+        # 获取微信发布器实例
+        publisher = get_wechat_publisher()
+        result = publisher.publish_collection(collection_id, db, publish_now)
+
+        if result['status'] in ('draft', 'published'):
+            return jsonify({
+                'success': True,
+                'data': result
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': result.get('message', '发布失败')
+            })
+    except Exception as e:
+        logger.error(f"发布合集失败: {e}")
+        return jsonify({'success': False, 'error': str(e)})
+        return jsonify({'success': False, 'error': str(e)})
 
 def auto_migrate_env_config():
     """首次启动时自动迁移环境变量配置到数据库"""
@@ -1869,6 +2590,399 @@ def auto_migrate_env_config():
         logger.error(f"自动迁移LLM配置失败: {e}")
 
 auto_migrate_env_config()
+
+# ==================== 微信编辑器相关接口 ====================
+
+UPLOAD_FOLDER = 'static/uploads/wechat'
+ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
+
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+@app.route('/wechat-editor-demo')
+def wechat_editor_demo():
+    """微信编辑器Demo页面"""
+    return render_template('wechat-editor-demo.html')
+
+@app.route('/publish-preview-test')
+def publish_preview_test():
+    """发布预览组件测试页面"""
+    return render_template('publish-preview-test.html')
+
+@app.route('/api/upload/wechat-image', methods=['POST'])
+def upload_wechat_image():
+    """微信图片上传接口（上传到微信服务器并使用缓存）"""
+    try:
+        if 'file' not in request.files:
+            return jsonify({'success': False, 'error': '没有文件'})
+
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({'success': False, 'error': '文件名为空'})
+
+        if not allowed_file(file.filename):
+            return jsonify({'success': False, 'error': '不支持的文件类型'})
+
+        # 保存到临时文件
+        filename = secure_filename(file.filename)
+        timestamp = int(time.time() * 1000)
+        ext = filename.rsplit('.', 1)[1].lower()
+        new_filename = f"{timestamp}_{uuid.uuid4().hex[:8]}.{ext}"
+        filepath = os.path.join(UPLOAD_FOLDER, new_filename)
+        file.save(filepath)
+
+        # 上传到微信（使用缓存）
+        publisher = get_wechat_publisher()
+        result = publisher.upload_image_with_cache(filepath)
+
+        if result and result.get('url'):
+            return jsonify({
+                'success': True,
+                'data': {
+                    'url': result['url'],
+                    'media_id': result.get('media_id', ''),
+                    'local_path': f"/static/uploads/wechat/{new_filename}",
+                    'from_cache': result.get('from_cache', False)
+                }
+            })
+        else:
+            # 微信上传失败，返回本地URL作为备用
+            local_url = f"/static/uploads/wechat/{new_filename}"
+            return jsonify({
+                'success': True,
+                'data': {
+                    'url': local_url,
+                    'media_id': '',
+                    'local_path': local_url,
+                    'fallback': True
+                }
+            })
+    except Exception as e:
+        logger.error(f"图片上传失败: {e}")
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/upload/wechat-images-batch', methods=['POST'])
+def upload_wechat_images_batch():
+    """批量上传图片到微信"""
+    try:
+        if 'files' not in request.files:
+            return jsonify({'success': False, 'error': '没有文件'})
+
+        files = request.files.getlist('files')
+        if not files:
+            return jsonify({'success': False, 'error': '文件列表为空'})
+
+        # 保存所有文件到临时目录
+        saved_paths = []
+        for file in files:
+            if file.filename and allowed_file(file.filename):
+                filename = secure_filename(file.filename)
+                timestamp = int(time.time() * 1000)
+                ext = filename.rsplit('.', 1)[1].lower()
+                new_filename = f"{timestamp}_{uuid.uuid4().hex[:8]}.{ext}"
+                filepath = os.path.join(UPLOAD_FOLDER, new_filename)
+                file.save(filepath)
+                saved_paths.append(filepath)
+
+        if not saved_paths:
+            return jsonify({'success': False, 'error': '没有有效的图片文件'})
+
+        # 批量上传到微信
+        publisher = get_wechat_publisher()
+        results = publisher.upload_images_batch(saved_paths, use_cache=True)
+
+        return jsonify({
+            'success': True,
+            'data': {
+                'total': len(results),
+                'succeeded': sum(1 for r in results if r['success']),
+                'failed': sum(1 for r in results if not r['success']),
+                'results': results
+            }
+        })
+    except Exception as e:
+        logger.error(f"批量上传图片失败: {e}")
+        return jsonify({'success': False, 'error': str(e)})
+
+
+# ==================== 微信发布历史与监控 ====================
+
+@app.route('/api/wechat/publish-records', methods=['GET'])
+def list_wechat_publish_records():
+    """获取发布历史（支持状态、时间过滤）"""
+    try:
+        limit = int(request.args.get('limit', 50))
+        status = request.args.get('status')
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
+
+        records = db.get_publish_records(
+            limit=limit, status=status,
+            start_date=start_date, end_date=end_date
+        )
+
+        # 统计
+        stats = {
+            'total': len(records),
+            'published': sum(1 for r in records if r['status'] == 'published'),
+            'draft': sum(1 for r in records if r['status'] == 'draft'),
+            'failed': sum(1 for r in records if r['status'] == 'failed'),
+            'pending': sum(1 for r in records if r['status'] == 'pending'),
+        }
+
+        return jsonify({
+            'success': True,
+            'data': {'records': records, 'stats': stats}
+        })
+    except Exception as e:
+        logger.error(f"获取发布历史失败: {e}")
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/wechat/publish-records/<int:record_id>', methods=['GET'])
+def get_wechat_publish_record(record_id):
+    """获取单条发布记录详情"""
+    try:
+        record = db.get_publish_record(record_id)
+        if not record:
+            return jsonify({'success': False, 'error': '发布记录不存在'})
+
+        # 如果有publish_id，查询微信最新状态
+        if record.get('status') == 'published' and record.get('result'):
+            try:
+                result_data = json.loads(record['result'])
+                publish_id = result_data.get('publish_id')
+                if publish_id:
+                    publisher = get_wechat_publisher()
+                    wechat_status = publisher.get_publish_status(publish_id)
+                    record['wechat_status'] = wechat_status
+            except Exception:
+                pass
+
+        return jsonify({'success': True, 'data': record})
+    except Exception as e:
+        logger.error(f"获取发布详情失败: {e}")
+        return jsonify({'success': False, 'error': str(e)})
+
+
+# 异步发布任务状态存储（内存 + 数据库）
+_publish_tasks = {}
+_publish_tasks_lock = threading.Lock()
+
+
+def _async_publish_worker(task_id: str, article_ids: list,
+                         publish_type: str, collection_id: int = None):
+    """后台发布任务"""
+    with _publish_tasks_lock:
+        _publish_tasks[task_id] = {
+            'task_id': task_id,
+            'status': 'running',
+            'progress': 0,
+            'total': len(article_ids) if article_ids else 1,
+            'completed': 0,
+            'results': [],
+            'started_at': datetime.now().isoformat(),
+            'completed_at': None,
+            'error': None
+        }
+
+    try:
+        if collection_id:
+            # 合集发布
+            publisher = get_wechat_publisher()
+            result = publisher.publish_collection(
+                collection_id, db, publish_now=(publish_type == 'publish')
+            )
+            with _publish_tasks_lock:
+                _publish_tasks[task_id]['results'].append(result)
+                _publish_tasks[task_id]['completed'] = 1
+                _publish_tasks[task_id]['progress'] = 100
+                _publish_tasks[task_id]['status'] = (
+                    'success' if result['status'] in ('draft', 'published') else 'failed'
+                )
+        else:
+            # 单文章批量发布
+            publisher = get_wechat_publisher()
+            total = len(article_ids)
+            for i, article_id in enumerate(article_ids):
+                article = db.get_generated_article_by_id(article_id)
+                if not article:
+                    continue
+                result = publisher.publish_article(article, db, publish_type)
+                with _publish_tasks_lock:
+                    _publish_tasks[task_id]['results'].append(result)
+                    _publish_tasks[task_id]['completed'] = i + 1
+                    _publish_tasks[task_id]['progress'] = int((i + 1) / total * 100)
+
+            with _publish_tasks_lock:
+                _publish_tasks[task_id]['status'] = 'success'
+
+        with _publish_tasks_lock:
+            _publish_tasks[task_id]['completed_at'] = datetime.now().isoformat()
+
+    except Exception as e:
+        logger.error(f"异步发布任务失败 {task_id}: {e}")
+        with _publish_tasks_lock:
+            _publish_tasks[task_id]['status'] = 'failed'
+            _publish_tasks[task_id]['error'] = str(e)
+            _publish_tasks[task_id]['completed_at'] = datetime.now().isoformat()
+
+
+@app.route('/api/wechat/publish/async', methods=['POST'])
+def async_publish():
+    """异步发布（返回task_id供轮询）"""
+    try:
+        data = request.json or {}
+        article_ids = data.get('article_ids', [])
+        collection_id = data.get('collection_id')
+        publish_type = data.get('publish_type', 'draft')
+
+        if not article_ids and not collection_id:
+            return jsonify({'success': False, 'error': '请提供article_ids或collection_id'})
+
+        task_id = uuid.uuid4().hex
+        thread = threading.Thread(
+            target=_async_publish_worker,
+            args=(task_id, article_ids, publish_type, collection_id),
+            daemon=True
+        )
+        thread.start()
+
+        return jsonify({
+            'success': True,
+            'data': {
+                'task_id': task_id,
+                'status': 'running',
+                'message': '发布任务已启动'
+            }
+        })
+    except Exception as e:
+        logger.error(f"启动异步发布失败: {e}")
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/wechat/publish/status/<task_id>', methods=['GET'])
+def get_async_publish_status(task_id):
+    """查询异步发布任务状态"""
+    try:
+        with _publish_tasks_lock:
+            task = _publish_tasks.get(task_id)
+
+        if not task:
+            return jsonify({'success': False, 'error': '任务不存在或已清理'})
+
+        return jsonify({'success': True, 'data': task})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/wechat/publish-records/<int:record_id>/retry', methods=['POST'])
+def retry_wechat_publish(record_id):
+    """重试失败的发布（最多3次）"""
+    try:
+        record = db.get_publish_record(record_id)
+        if not record:
+            return jsonify({'success': False, 'error': '发布记录不存在'})
+
+        if record['status'] != 'failed':
+            return jsonify({'success': False, 'error': '只能重试失败的发布'})
+
+        # 解析重试次数
+        result_data = {}
+        try:
+            result_data = json.loads(record.get('result') or '{}')
+        except Exception:
+            pass
+
+        retry_count = result_data.get('retry_count', 0)
+        if retry_count >= 3:
+            return jsonify({'success': False, 'error': '已达最大重试次数(3次)'})
+
+        # 获取原文章并重试
+        article_id = record.get('article_id')
+        article = db.get_generated_article_by_id(article_id)
+        if not article:
+            return jsonify({'success': False, 'error': '原文章不存在'})
+
+        publish_type = record.get('publish_type', 'draft')
+        publisher = get_wechat_publisher()
+        new_result = publisher.publish_article(article, db, publish_type)
+
+        # 更新原记录
+        new_result_data = {
+            'retry_count': retry_count + 1,
+            'retry_at': datetime.now().isoformat(),
+            'previous_record_id': record_id,
+            'new_status': new_result['status']
+        }
+
+        db.update_publish_record(record_id, {
+            'result': json.dumps(new_result_data, ensure_ascii=False)
+        })
+
+        return jsonify({
+            'success': True,
+            'data': {
+                'retry_count': retry_count + 1,
+                'new_status': new_result['status'],
+                'new_result': new_result
+            }
+        })
+    except Exception as e:
+        logger.error(f"重试发布失败: {e}")
+        return jsonify({'success': False, 'error': str(e)})
+
+
+# ==================== 图片素材库管理 ====================
+
+@app.route('/api/wechat/media-cache', methods=['GET'])
+def list_media_cache():
+    """查询本地缓存的图片"""
+    try:
+        limit = int(request.args.get('limit', 100))
+        cache_list = db.get_all_media_cache(limit=limit)
+        return jsonify({
+            'success': True,
+            'data': {
+                'total': len(cache_list),
+                'items': cache_list
+            }
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/wechat/media-cache/<int:cache_id>', methods=['DELETE'])
+def delete_media_cache_item(cache_id):
+    """删除单个缓存项"""
+    try:
+        if db.delete_media_cache(cache_id):
+            return jsonify({'success': True, 'message': '删除成功'})
+        return jsonify({'success': False, 'error': '缓存项不存在'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/wechat/media-cache/cleanup', methods=['POST'])
+def cleanup_media_cache_items():
+    """清理3天前的缓存"""
+    try:
+        data = request.json or {}
+        keep_hours = data.get('keep_hours', 72)
+        deleted = db.cleanup_expired_media_cache(keep_hours=keep_hours)
+        return jsonify({
+            'success': True,
+            'data': {
+                'deleted': deleted,
+                'keep_hours': keep_hours
+            }
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
 
 if __name__ == '__main__':
     print("=" * 60)

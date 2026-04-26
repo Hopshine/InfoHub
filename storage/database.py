@@ -141,6 +141,12 @@ class Database:
             )
         ''')
 
+        # 新增字段（兼容已有数据库）
+        try:
+            cursor.execute('ALTER TABLE generated_articles ADD COLUMN content_wechat TEXT')
+        except sqlite3.OperationalError:
+            pass
+
         # 发布记录表
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS publish_records (
@@ -409,6 +415,34 @@ class Database:
             )
         ''')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_draft_batch ON wechat_drafts(batch_id)')
+
+        # 文章合集表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS article_collections (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                description TEXT,
+                article_ids TEXT NOT NULL,
+                article_count INTEGER NOT NULL,
+                cover_image TEXT,
+                status TEXT DEFAULT 'draft',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_collection_status ON article_collections(status)')
+
+        # 微信图片缓存表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS wechat_media_cache (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                url TEXT NOT NULL UNIQUE,
+                media_id TEXT NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_media_cache_url ON wechat_media_cache(url)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_media_cache_created ON wechat_media_cache(created_at)')
 
         conn.commit()
         conn.close()
@@ -694,6 +728,16 @@ class Database:
         conn.close()
         return results
 
+    def get_trending_by_id(self, trending_id: int) -> Optional[Dict]:
+        """根据ID获取单条热点"""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM trending WHERE id = ?', (trending_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None
+
     def get_trending_history(self, platform: str, hours: int = 24) -> List[Dict]:
         """获取热点历史数据（按batch分组）"""
         conn = sqlite3.connect(self.db_path)
@@ -717,6 +761,92 @@ class Database:
             (f'-{keep_hours} hours',))
         conn.commit()
         conn.close()
+
+    def get_trending_by_title(self, platform: str, title: str) -> Optional[Dict]:
+        """根据平台和标题查询热点（防重复）"""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM trending WHERE platform = ? AND title = ? ORDER BY created_at DESC LIMIT 1",
+            (platform, title))
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None
+
+    def get_trending_by_id(self, trending_id: int) -> Optional[Dict]:
+        """根据ID查询热点"""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM trending WHERE id = ?", (trending_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None
+
+    def save_trending_item(self, item: Dict):
+        """保存单条热点数据（防重复插入）"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO trending (platform, rank_num, title, hot_value, url, label, extra, batch_id, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        ''', (
+            item.get('platform', ''),
+            item.get('rank', 0),
+            item.get('title', ''),
+            str(item.get('hot_value', '')),
+            item.get('url', ''),
+            item.get('label', ''),
+            json.dumps(item.get('extra', {}), ensure_ascii=False) if item.get('extra') else '',
+            item.get('batch_id', '')
+        ))
+        conn.commit()
+        conn.close()
+
+    def save_trending_evaluation(self, trending_id: int, eval_result: Dict, model: str) -> None:
+        """保存热点评估结果"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('''
+            UPDATE trending SET
+                eval_score = ?,
+                eval_grade = ?,
+                eval_selected = ?,
+                eval_result = ?,
+                eval_model = ?,
+                eval_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        ''', (
+            eval_result.get('total_score', 0),
+            eval_result.get('grade', 'C'),
+            1 if eval_result.get('selected') else 0,
+            json.dumps(eval_result, ensure_ascii=False),
+            model,
+            trending_id
+        ))
+        conn.commit()
+        conn.close()
+
+    def get_trending_evaluation(self, trending_id: int) -> Optional[Dict]:
+        """获取热点的评估结果"""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute(
+            'SELECT eval_score, eval_grade, eval_selected, eval_result, eval_model, eval_at FROM trending WHERE id = ?',
+            (trending_id,)
+        )
+        row = cursor.fetchone()
+        conn.close()
+        if row and row['eval_result']:
+            result = dict(row)
+            try:
+                result['eval_result'] = json.loads(result['eval_result'])
+            except:
+                pass
+            return result
+        return None
 
     # ==================== 热点新闻操作 ====================
 
@@ -806,16 +936,20 @@ class Database:
         try:
             cursor.execute('''
                 INSERT INTO generated_articles
-                (hotnews_id, title, content, summary, keywords, style, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                (hotnews_id, title, content, content_wechat, summary, keywords, style, status, source_type, source_id, cover_image)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 article.get('hotnews_id'),
                 article.get('title', ''),
                 article.get('content', ''),
+                article.get('content_wechat', article.get('content', '')),
                 article.get('summary', ''),
                 article.get('keywords', ''),
                 article.get('style', 'news'),
-                article.get('status', 'draft')
+                article.get('status', 'draft'),
+                article.get('source_type', 'manual'),
+                article.get('source_id'),
+                article.get('cover_image', '')
             ))
             conn.commit()
             return cursor.lastrowid
@@ -888,15 +1022,18 @@ class Database:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         try:
-            cursor.execute('''
-                UPDATE generated_articles
-                SET title = ?, content = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE id = ?
-            ''', (
-                data.get('title', ''),
-                data.get('content', ''),
-                article_id
-            ))
+            set_clauses = []
+            values = []
+            for key in ['title', 'content', 'content_wechat', 'summary', 'keywords']:
+                if key in data:
+                    set_clauses.append(f'{key} = ?')
+                    values.append(data[key])
+            set_clauses.append('updated_at = CURRENT_TIMESTAMP')
+            values.append(article_id)
+
+            cursor.execute(
+                f'UPDATE generated_articles SET {", ".join(set_clauses)} WHERE id = ?',
+                values)
             conn.commit()
             return cursor.rowcount > 0
         except Exception:
@@ -944,20 +1081,53 @@ class Database:
         finally:
             conn.close()
 
-    def get_publish_records(self, limit: int = 20) -> List[Dict]:
-        """获取发布记录"""
+    def get_publish_records(self, limit: int = 20, status: str = None,
+                           start_date: str = None, end_date: str = None) -> List[Dict]:
+        """获取发布记录（支持过滤）"""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        query = '''
+            SELECT pr.*, ga.title as article_title
+            FROM publish_records pr
+            LEFT JOIN generated_articles ga ON pr.article_id = ga.id
+            WHERE 1=1
+        '''
+        params = []
+
+        if status:
+            query += ' AND pr.status = ?'
+            params.append(status)
+        if start_date:
+            query += ' AND pr.created_at >= ?'
+            params.append(start_date)
+        if end_date:
+            query += ' AND pr.created_at <= ?'
+            params.append(end_date)
+
+        query += ' ORDER BY pr.created_at DESC LIMIT ?'
+        params.append(limit)
+
+        cursor.execute(query, params)
+        results = [dict(r) for r in cursor.fetchall()]
+        conn.close()
+        return results
+
+    def get_publish_record(self, record_id: int) -> Optional[Dict]:
+        """获取单条发布记录"""
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         cursor.execute('''
-            SELECT pr.*, ga.title as article_title
+            SELECT pr.*, ga.title as article_title, ga.content as article_content
             FROM publish_records pr
             LEFT JOIN generated_articles ga ON pr.article_id = ga.id
-            ORDER BY pr.created_at DESC LIMIT ?
-        ''', (limit,))
-        results = [dict(r) for r in cursor.fetchall()]
+            WHERE pr.id = ?
+        ''', (record_id,))
+        row = cursor.fetchone()
         conn.close()
-        return results
+        return dict(row) if row else None
 
     def update_publish_record(self, record_id: int, updates: Dict):
         """更新发布记录"""
@@ -1238,9 +1408,11 @@ class Database:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         cursor.execute('''
-            INSERT INTO agent_tasks (task_type, status, input_data, output_data, parent_task_id, batch_id)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (task_data.get('task_type'), task_data.get('status', 'pending'),
+            INSERT INTO agent_tasks (task_type, stage, task_key, task_name, status, input_data, output_data, parent_task_id, batch_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (task_data.get('task_type'), task_data.get('stage'),
+              task_data.get('task_key'), task_data.get('task_name'),
+              task_data.get('status', 'pending'),
               task_data.get('input_data'), task_data.get('output_data'),
               task_data.get('parent_task_id'), task_data.get('batch_id')))
         task_id = cursor.lastrowid
@@ -1257,12 +1429,22 @@ class Database:
         conn.close()
         return dict(row) if row else None
 
-    def update_agent_task(self, task_id: int, updates: Dict):
+    def update_agent_task(self, task_id, updates: Dict):
+        """更新agent任务 - task_id可以是数据库id或task_key"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         set_clause = ', '.join([f'{k} = ?' for k in updates.keys()])
-        values = list(updates.values()) + [task_id]
-        cursor.execute(f'UPDATE agent_tasks SET {set_clause} WHERE id = ?', values)
+        values = list(updates.values())
+
+        # 判断task_id是整数还是字符串
+        if isinstance(task_id, int):
+            values.append(task_id)
+            cursor.execute(f'UPDATE agent_tasks SET {set_clause} WHERE id = ?', values)
+        else:
+            # 字符串，按task_key查询
+            values.append(task_id)
+            cursor.execute(f'UPDATE agent_tasks SET {set_clause} WHERE task_key = ?', values)
+
         conn.commit()
         conn.close()
 
@@ -1675,3 +1857,215 @@ class Database:
         results = [dict(r) for r in cursor.fetchall()]
         conn.close()
         return results
+
+    # ==================== Article Collections ====================
+
+    def create_article_collection(self, data: Dict) -> Optional[int]:
+        """创建文章合集"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        try:
+            article_ids = data.get('article_ids', [])
+            if isinstance(article_ids, list):
+                article_ids = json.dumps(article_ids)
+
+            cursor.execute('''
+                INSERT INTO article_collections (title, description, article_ids, article_count, cover_image, status)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (
+                data.get('title', ''),
+                data.get('description', ''),
+                article_ids,
+                data.get('article_count', len(json.loads(article_ids))),
+                data.get('cover_image', ''),
+                data.get('status', 'draft')
+            ))
+            collection_id = cursor.lastrowid
+            conn.commit()
+            return collection_id
+        except Exception:
+            return None
+        finally:
+            conn.close()
+
+    def get_article_collections(self, status: str = None) -> List[Dict]:
+        """获取文章合集列表"""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        if status:
+            cursor.execute(
+                'SELECT * FROM article_collections WHERE status = ? ORDER BY created_at DESC',
+                (status,))
+        else:
+            cursor.execute('SELECT * FROM article_collections ORDER BY created_at DESC')
+        results = [dict(r) for r in cursor.fetchall()]
+        conn.close()
+        return results
+
+    def get_article_collection(self, collection_id: int) -> Optional[Dict]:
+        """获取单个文章合集"""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM article_collections WHERE id = ?', (collection_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None
+
+    def update_article_collection(self, collection_id: int, data: Dict) -> bool:
+        """更新文章合集"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        try:
+            set_clauses = []
+            values = []
+            for key in ['title', 'description', 'article_ids', 'article_count', 'cover_image', 'status']:
+                if key in data:
+                    set_clauses.append(f'{key} = ?')
+                    val = data[key]
+                    if key == 'article_ids' and isinstance(val, list):
+                        val = json.dumps(val)
+                    values.append(val)
+            set_clauses.append('updated_at = CURRENT_TIMESTAMP')
+            values.append(collection_id)
+            cursor.execute(
+                f'UPDATE article_collections SET {", ".join(set_clauses)} WHERE id = ?',
+                values)
+            conn.commit()
+            return cursor.rowcount > 0
+        except Exception:
+            return False
+        finally:
+            conn.close()
+
+    def delete_article_collection(self, collection_id: int) -> bool:
+        """删除文章合集"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM article_collections WHERE id = ?', (collection_id,))
+        deleted = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return deleted
+
+    def validate_collection_articles(self, article_ids: List[int]) -> Dict:
+        """校验合集文章：2-8篇，状态为draft或approved"""
+        if not article_ids or len(article_ids) < 2 or len(article_ids) > 8:
+            return {'valid': False, 'error': '合集必须包含2-8篇文章'}
+
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        placeholders = ','.join('?' * len(article_ids))
+        cursor.execute(f'''
+            SELECT id, title, status FROM generated_articles
+            WHERE id IN ({placeholders})
+        ''', article_ids)
+        articles = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+
+        if len(articles) != len(article_ids):
+            return {'valid': False, 'error': '部分文章不存在'}
+
+        invalid_status = [a for a in articles if a['status'] not in ('draft', 'approved')]
+        if invalid_status:
+            return {'valid': False, 'error': f"文章状态必须为draft或approved，当前有{len(invalid_status)}篇不符合"}
+
+        return {'valid': True, 'articles': articles}
+
+    def get_collection_stats(self) -> Dict:
+        """获取合集统计信息"""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        cursor.execute('SELECT COUNT(*) as total FROM article_collections')
+        total = cursor.fetchone()['total']
+
+        cursor.execute('''
+            SELECT status, COUNT(*) as count
+            FROM article_collections
+            GROUP BY status
+        ''')
+        status_counts = {row['status']: row['count'] for row in cursor.fetchall()}
+
+        cursor.execute('SELECT AVG(article_count) as avg_count FROM article_collections')
+        avg_count = cursor.fetchone()['avg_count'] or 0
+
+        conn.close()
+        return {
+            'total': total,
+            'by_status': status_counts,
+            'avg_article_count': round(avg_count, 2)
+        }
+
+    # ==================== WeChat Media Cache ====================
+
+    def get_wechat_media_cache(self, url: str, max_age_hours: int = 72) -> Optional[Dict]:
+        """获取微信图片缓存（默认3天内有效）"""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT * FROM wechat_media_cache
+            WHERE url = ? AND created_at >= datetime('now', ?)
+            ORDER BY created_at DESC LIMIT 1
+        ''', (url, f'-{max_age_hours} hours'))
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None
+
+    def save_wechat_media_cache(self, url: str, media_id: str) -> bool:
+        """保存或更新微信图片缓存"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        try:
+            cursor.execute('''
+                INSERT INTO wechat_media_cache (url, media_id, created_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(url) DO UPDATE SET
+                    media_id = excluded.media_id,
+                    created_at = excluded.created_at
+            ''', (url, media_id, datetime.now().isoformat()))
+            conn.commit()
+            return True
+        except Exception:
+            return False
+        finally:
+            conn.close()
+
+    def cleanup_expired_media_cache(self, keep_hours: int = 72):
+        """清理过期微信图片缓存"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            "DELETE FROM wechat_media_cache WHERE created_at < datetime('now', ?)",
+            (f'-{keep_hours} hours',))
+        deleted = cursor.rowcount
+        conn.commit()
+        conn.close()
+        return deleted
+
+    def get_all_media_cache(self, limit: int = 100) -> List[Dict]:
+        """获取所有媒体缓存"""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT * FROM wechat_media_cache
+            ORDER BY created_at DESC LIMIT ?
+        ''', (limit,))
+        results = [dict(r) for r in cursor.fetchall()]
+        conn.close()
+        return results
+
+    def delete_media_cache(self, cache_id: int) -> bool:
+        """删除单个媒体缓存"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM wechat_media_cache WHERE id = ?', (cache_id,))
+        deleted = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return deleted

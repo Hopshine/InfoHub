@@ -80,7 +80,13 @@ class ContentAnalyzer:
                         {"role": "user", "content": prompt}
                     ]
                 )
-                response_text = message.content[0].text
+                # 处理anthropic返回的content（可能包含ThinkingBlock）
+                response_text = ''
+                for block in message.content:
+                    if hasattr(block, 'text'):
+                        response_text += block.text
+                    elif hasattr(block, 'type') and block.type == 'text':
+                        response_text += block.text if hasattr(block, 'text') else str(block)
             result = self._parse_analysis_result(response_text)
 
             logger.info(f"文章分析完成: {title}")

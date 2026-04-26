@@ -1,6 +1,7 @@
 {
   "permissions": {
     "allow": [
+      "WebSearch",
       "Bash(ls -lh *.md *.py *.txt)",
       "Bash(wc -l **/*.py 2>/dev/null | tail -1)",
       "Bash(python demo.py)",
@@ -67,7 +68,29 @@
       "Bash(where msedge:*)",
       "Read(//c/Program Files \\(x86\\)/Microsoft/Edge/Application/**)",
       "Read(//c/Program Files/Microsoft/Edge/Application/**)",
-      "Read(//c/Program Files/Google/Chrome/Application/**)"
+      "Read(//c/Program Files/Google/Chrome/Application/**)",
+      "Bash(start http://localhost:9000/app#/settings)",
+      "Bash(dir collector\\\\*_trending.py tests\\\\test_trending_all.py)",
+      "Bash(start http://localhost:9000/app#/agent)",
+      "Bash(pkill -f \"python web_app.py\")",
+      "Bash(sqlite3 c:/Users/Administrator/code/infoHub/data/demo.db \".schema agent_articles\")",
+      "Bash(node -c static/js/pages/agent.js)",
+      "Bash(node -c static/js/components/agent-flow.js)",
+      "Bash(netstat -ano)",
+      "Bash(taskkill /F /PID 16568 /PID 19696 /PID 25948 /PID 27692 /PID 26360 /PID 19240)",
+      "Bash(taskkill //F //PID 16568)",
+      "Bash(taskkill //F //PID 19696)",
+      "Bash(taskkill //F //PID 25948)",
+      "Bash(taskkill //F //PID 27692)",
+      "Bash(taskkill //F //PID 26360)",
+      "Bash(taskkill //F //IM python.exe)",
+      "Bash(node -c static/js/components/agent-dag.js)",
+      "Bash(node -c static/js/pages/creation.js)",
+      "Bash(pip list *)",
+      "Bash(ollama list *)",
+      "Bash(sqlite3 data/demo.db \".schema hotnews\")",
+      "Bash(pkill -f \"tail -f logs\")",
+      "Bash(awk '{print $NF}')"
     ]
   }
 }
