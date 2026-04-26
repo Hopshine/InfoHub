@@ -130,6 +130,11 @@ class TopicWorkflow:
         )
         if result:
             self.topic['_content'] = result.get('content', '')
+            # 存储采集结果到数据库
+            await asyncio.to_thread(self.db.update_topic_workflow, self.id, {
+                'collect_result': json.dumps(result, ensure_ascii=False),
+                'updated_at': datetime.now().isoformat()
+            })
             await self.transition_to('analyzing', 'proceed', 'Content collected')
         else:
             raise Exception("Failed to collect content")
@@ -151,11 +156,26 @@ class TopicWorkflow:
             {'title': self.topic.get('title', ''), 'content': content}
         )
         self.topic['_analysis'] = result
+        # 存储分析结果到数据库
+        await asyncio.to_thread(self.db.update_topic_workflow, self.id, {
+            'analysis_result': json.dumps(result, ensure_ascii=False),
+            'updated_at': datetime.now().isoformat()
+        })
         await self.transition_to('planning', 'proceed', 'Analysis completed')
 
     async def _plan(self):
         """规划阶段 - 文章大纲"""
         # 目前的实现较简单，保留topic数据传递
+        # 存储策划结果（即使是简单的pass-through）
+        plan_data = {
+            'topic': self.topic.get('title', ''),
+            'analysis': self.topic.get('_analysis', {}),
+            'approach': 'direct_generation'
+        }
+        await asyncio.to_thread(self.db.update_topic_workflow, self.id, {
+            'plan_result': json.dumps(plan_data, ensure_ascii=False),
+            'updated_at': datetime.now().isoformat()
+        })
         await self.transition_to('writing', 'proceed', 'Plan ready')
 
     async def _write(self):

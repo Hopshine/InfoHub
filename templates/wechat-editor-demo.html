@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>wangEditor - 微信公众号编辑器Demo</title>
+    <link href="https://unpkg.com/@wangeditor/editor@5.1.23/dist/css/style.css" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/components/wechat-editor.css">
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            background: #f0f2f5;
+        }
+        .demo-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: #fff;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+        .demo-header {
+            padding: 16px 20px;
+            background: #07c160;
+            color: #fff;
+        }
+        .demo-header h1 {
+            margin: 0;
+            font-size: 18px;
+        }
+        .demo-actions {
+            padding: 12px 20px;
+            border-bottom: 1px solid #e8e8e8;
+            display: flex;
+            gap: 8px;
+        }
+        #toolbar-container {
+            border-bottom: 1px solid #e8e8e8;
+        }
+        #editor-container {
+            height: 500px;
+            overflow-y: auto;
+        }
+        .demo-preview {
+            padding: 20px;
+            background: #f5f5f5;
+            display: none;
+        }
+        .demo-preview.active {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div class="demo-container">
+        <div class="demo-header">
+            <h1>wangEditor 微信公众号编辑器 Demo</h1>
+        </div>
+        <div class="demo-actions">
+            <button class="wechat-editor-btn primary" onclick="demoGetContent()">获取HTML</button>
+            <button class="wechat-editor-btn" onclick="demoPreview()">预览</button>
+            <button class="wechat-editor-btn" onclick="demoClear()">清空</button>
+            <button class="wechat-editor-btn" onclick="demoPasteMarkdown()">测试Markdown粘贴</button>
+        </div>
+        <div id="toolbar-container"></div>
+        <div id="editor-container"></div>
+        <div id="preview-container" class="demo-preview"></div>
+    </div>
+
+    <script src="https://unpkg.com/@wangeditor/editor@5.1.23/dist/index.js"></script>
+    <script src="/static/js/components/wechat-editor.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            window.wechatEditor.init('#editor-container', '#toolbar-container');
+            window.wechatEditor.onChange = function(content) {
+                console.log('内容变化:', content.length, '字符');
+            };
+        });
+
+        function demoGetContent() {
+            const html = window.wechatEditor.getHtml();
+            console.log(html);
+            alert('已输出到控制台，长度: ' + html.length);
+        }
+
+        function demoPreview() {
+            const previewEl = document.getElementById('preview-container');
+            previewEl.classList.toggle('active');
+            if (previewEl.classList.contains('active')) {
+                window.wechatEditor.togglePreview('preview-container');
+            }
+        }
+
+        function demoClear() {
+            window.wechatEditor.clear();
+        }
+
+        function demoPasteMarkdown() {
+            const md = `# 标题一\n\n## 标题二\n\n这是**加粗**和*斜体*文本。\n\n- 列表项1\n- 列表项2\n\n[链接](https://example.com)\n\n\`代码\``;
+            const html = window.wechatEditor.convertMarkdownToHtml(md);
+            window.wechatEditor.setHtml(html);
+        }
+    </script>
+</body>
+</html>
