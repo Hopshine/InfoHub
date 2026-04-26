@@ -83,13 +83,8 @@ hotnews_article_collector = HotNewsArticleCollector()
 workflow_manager = WorkflowManager(db, db_path)
 
 @app.route('/')
-def index():
-    """主页"""
-    return render_template('index.html')
-
-@app.route('/app')
 def app_page():
-    """新版SPA应用入口"""
+    """SPA应用入口"""
     return render_template('app.html')
 
 @app.route('/api/stats')
@@ -609,11 +604,6 @@ def crawl_stream(job_id):
 
 
 # ==================== 热点监控API ====================
-
-@app.route('/trending')
-def trending_page():
-    """热点监控页面"""
-    return render_template('trending.html')
 
 
 @app.route('/api/trending')
@@ -1145,13 +1135,10 @@ agent_state = {
     'current_node': None,
     'nodes': {
         'scan':     {'status': 'pending', 'count': 0, 'label': '热点扫描'},
-        'evaluate': {'status': 'pending', 'count': 0, 'label': '价值评估'},
         'collect':  {'status': 'pending', 'count': 0, 'label': '内容采集'},
-        'analyze':  {'status': 'pending', 'count': 0, 'label': '深度分析'},
-        'plan':     {'status': 'pending', 'count': 0, 'label': '创意策划'},
+        'analyze':  {'status': 'pending', 'count': 0, 'label': '分析评估'},
+        'select':   {'status': 'pending', 'count': 0, 'label': '精选话题'},
         'write':    {'status': 'pending', 'count': 0, 'label': '推文生成'},
-        'check':    {'status': 'pending', 'count': 0, 'label': '质量检查'},
-        'compose':  {'status': 'pending', 'count': 0, 'label': '编排推送'},
     },
     'articles_generated': 0,
     'stages': {},
@@ -1531,10 +1518,73 @@ async def check_article_async(article, llm_logger):
     return final_score
 
 
+async def collect_and_evaluate_topic_async(topic, batch_id, llm_logger, task_id):
+    """采集内容后立即用LLM进行评估（含内容的多维度评估）"""
+    from agent.topic_evaluator import TopicEvaluator
+
+    # 1. 采集内容
+    try:
+        collect_result = await asyncio.to_thread(
+            hotnews_article_collector.collect_from_hotnews,
+            {
+                'title': topic.get('title', ''),
+                'url': topic.get('url', ''),
+                'source': topic.get('platform', ''),
+            }
+        )
+        if collect_result:
+            topic['_content'] = collect_result.get('content', '')
+    except Exception as e:
+        logger.warning(f"采集内容失败: {topic.get('title', '')[:30]} - {e}")
+
+    trending_id = topic.get('id')
+
+    # 防重复：如果已有评估结果，跳过（但保留已采集内容）
+    if trending_id:
+        cached = await asyncio.to_thread(db.get_trending_evaluation, trending_id)
+        if cached and cached.get('eval_result'):
+            result = cached['eval_result']
+            selected = result.get('selected', False)
+            logger.info(f"跳过已评估话题: {topic.get('title', '')[:30]} ({cached.get('eval_grade', '?')}级)")
+            await asyncio.to_thread(db.update_agent_task, task_id, {
+                'status': 'completed' if selected else 'failed',
+                'output_data': json.dumps(result, ensure_ascii=False),
+                'completed_at': datetime.now().isoformat()
+            })
+            if not selected:
+                return None
+            topic['_eval_score'] = result.get('total_score', 0)
+            topic['_eval_grade'] = result.get('grade', 'C')
+            return topic
+
+    # 2. 用LLM评估（包含内容摘要）
+    evaluator = TopicEvaluator(db)
+    result = await asyncio.to_thread(evaluator.evaluate, topic, llm_logger)
+
+    selected = result.get('selected', False)
+
+    if trending_id:
+        model_name = evaluator.config.get('model', 'unknown') if evaluator.config else 'unknown'
+        await asyncio.to_thread(db.save_trending_evaluation, trending_id, result, model_name)
+
+    await asyncio.to_thread(db.update_agent_task, task_id, {
+        'status': 'completed' if selected else 'failed',
+        'output_data': json.dumps(result, ensure_ascii=False),
+        'completed_at': datetime.now().isoformat()
+    })
+
+    if not selected:
+        return None
+    topic['_eval_score'] = result.get('total_score', 0)
+    topic['_eval_grade'] = result.get('grade', 'C')
+    return topic
+
+
 async def run_agent_pipeline_async(batch_id):
-    """Async agent pipeline with WorkflowExecutor for parallel topic processing."""
-    from agent.workflow_engine import WorkflowExecutor, compose_wechat_draft
+    """新流程: 扫描 → 采集+分析评估 → 精选Top10 → 生成文章"""
     from utils.ollama_checker import ensure_ollama_running
+    from generator.article_generator import ArticleGenerator
+    from config_loader import LLMConfigLoader
 
     try:
         agent_state['running'] = True
@@ -1543,35 +1593,26 @@ async def run_agent_pipeline_async(batch_id):
         agent_state['error'] = None
         _reset_nodes()
 
-        # 确保Ollama服务运行
         await asyncio.to_thread(ensure_ollama_running)
 
-        executor = ParallelExecutor(max_concurrency=5)
-
-        # ===== Stage 1: Scan (4 platforms in parallel) =====
+        # ===== Stage 1: Scan (4平台并行) =====
         _set_node('scan', 'running')
         _update_stage('scan', 'running', total=4)
         platforms = ['weibo', 'zhihu', 'baidu', 'douyin']
+        scan_executor = ParallelExecutor(max_concurrency=4)
         scan_tasks = []
         for p in platforms:
             tid = f"scan_{p}"
             _register_task(tid, 'scan', f'扫描{p}')
             _update_task(tid, 'running')
-
-            # 创建数据库任务记录
             await asyncio.to_thread(db.create_agent_task, {
-                'task_key': tid,
-                'stage': 'scan',
-                'task_type': 'scan',
-                'task_name': p,  # 平台名称
-                'status': 'running',
-                'batch_id': batch_id
+                'task_key': tid, 'stage': 'scan', 'task_type': 'scan',
+                'task_name': p, 'status': 'running', 'batch_id': batch_id
             })
-
             llm_log = LLMLogger(tid, batch_id)
             scan_tasks.append({'fn': scan_platform_async, 'args': (p, llm_log), 'id': tid, '_logger': llm_log})
 
-        scan_results = await executor.run(scan_tasks)
+        scan_results = await scan_executor.run(scan_tasks)
         trending = []
         completed_scan = 0
         for r in scan_results:
@@ -1580,18 +1621,10 @@ async def run_agent_pipeline_async(batch_id):
             count = result.get('count', 0)
             saved = result.get('saved', 0)
             items = result.get('items', [])
-
-            # 更新任务状态，包含平台和数量信息
             _update_task(r['id'], 'completed' if not r['error'] else 'failed', r.get('error'))
-
-            # 存储扫描结果到task
             if not r['error']:
                 await asyncio.to_thread(db.update_agent_task, r['id'], {
-                    'output_data': json.dumps({
-                        'platform': platform,
-                        'count': count,
-                        'saved': saved
-                    }, ensure_ascii=False)
+                    'output_data': json.dumps({'platform': platform, 'count': count, 'saved': saved}, ensure_ascii=False)
                 })
                 trending.extend(items)
                 completed_scan += 1
@@ -1602,10 +1635,9 @@ async def run_agent_pipeline_async(batch_id):
         if not trending:
             _set_node('scan', 'completed', 0)
             agent_state['error'] = '无热点数据'
-            agent_state['running'] = False
             return
 
-        # 去重（按标题）
+        # 去重 + 热度排序
         seen_titles = set()
         unique_trending = []
         for item in trending:
@@ -1613,39 +1645,29 @@ async def run_agent_pipeline_async(batch_id):
             if title and title not in seen_titles:
                 seen_titles.add(title)
                 unique_trending.append(item)
-        trending = unique_trending
 
-        # 按热度排序（高热度优先）
         def get_hot_value(item):
             try:
                 return int(str(item.get('hot_value', '0')).replace(',', '') or 0)
             except:
                 return 0
-        trending.sort(key=get_hot_value, reverse=True)
+        unique_trending.sort(key=get_hot_value, reverse=True)
+        trending = unique_trending
 
         _set_node('scan', 'completed', len(trending))
         logger.info(f"扫描完成: {len(trending)}条热点（去重后）")
 
-        # 决策1: 扫描结果是否充足
-        scan_ok = await decision_scan_sufficient(trending, agent_state)
-        if not scan_ok:
-            logger.warning(f"扫描结果不足，仅{len(trending)}条")
+        # ===== Stage 2: 采集+评估 (并行，含内容) =====
+        _set_node('collect', 'running')
+        _update_stage('collect', 'running', total=len(trending))
 
-        # ===== Stage 2: Evaluate (评估所有采集到的热点) =====
-        _set_node('evaluate', 'running')
-        topics_to_eval = trending  # 评估所有热点
-        _update_stage('evaluate', 'running', total=len(topics_to_eval))
-        eval_tasks = []
-        for i, topic in enumerate(topics_to_eval):
-            tid = f"eval_{i}"
-            _register_task(tid, 'evaluate', topic.get('title', '')[:30])
+        collect_eval_tasks = []
+        for i, topic in enumerate(trending):
+            tid = f"collect_eval_{i}"
+            _register_task(tid, 'collect', topic.get('title', '')[:30])
             _update_task(tid, 'running')
-
-            # 预先创建数据库记录
             await asyncio.to_thread(db.create_agent_task, {
-                'task_key': tid,
-                'stage': 'evaluate',
-                'task_type': 'evaluate',
+                'task_key': tid, 'stage': 'collect', 'task_type': 'collect_evaluate',
                 'task_name': topic.get('title', '')[:60],
                 'status': 'running',
                 'input_data': json.dumps({
@@ -1655,63 +1677,84 @@ async def run_agent_pipeline_async(batch_id):
                 }, ensure_ascii=False),
                 'batch_id': batch_id
             })
-
             llm_log = LLMLogger(tid, batch_id)
-            eval_tasks.append({'fn': evaluate_topic_async, 'args': (topic, batch_id, llm_log, tid), 'id': tid, '_logger': llm_log})
+            collect_eval_tasks.append({
+                'fn': collect_and_evaluate_topic_async,
+                'args': (topic, batch_id, llm_log, tid),
+                'id': tid, '_logger': llm_log
+            })
 
-        eval_executor = ParallelExecutor(max_concurrency=20)
-        eval_results = await eval_executor.run(eval_tasks)
+        collect_eval_executor = ParallelExecutor(max_concurrency=10)
+        collect_eval_results = await collect_eval_executor.run(collect_eval_tasks)
 
-        # 只保留通过评估的话题（result不为None）
-        selected_topics = []
-        eval_passed = 0
-        for r in eval_results:
+        evaluated_topics = []
+        collect_completed = 0
+        for r in collect_eval_results:
             _update_task(r['id'], 'completed' if not r['error'] else 'failed', r.get('error'))
             if r['result'] is not None:
-                selected_topics.append(r['result'])
-                eval_passed += 1
+                evaluated_topics.append(r['result'])
+                collect_completed += 1
 
-        _update_stage('evaluate', 'completed', total=len(topics_to_eval), completed=eval_passed)
-        _set_node('evaluate', 'completed', eval_passed)
+        _update_stage('collect', 'completed', total=len(trending), completed=collect_completed)
+        _set_node('collect', 'completed', len(trending))
 
-        logger.info(f"Evaluation: {eval_passed}/{len(topics_to_eval)} topics selected")
+        # ===== Stage 3: 分析评估完成标记 =====
+        _set_node('analyze', 'running')
+        _update_stage('analyze', 'running', total=len(evaluated_topics))
+        _set_node('analyze', 'completed', len(evaluated_topics))
+        _update_stage('analyze', 'completed', total=len(trending), completed=len(evaluated_topics))
+        logger.info(f"采集+评估完成: {len(evaluated_topics)}/{len(trending)} 通过")
 
-        # 决策2: 筛选有价值的话题（已在evaluate中完成）
-        topics = selected_topics
+        # ===== Stage 4: 精选 Top 10 =====
+        _set_node('select', 'running')
+        evaluated_topics.sort(key=lambda t: t.get('_eval_score', 0), reverse=True)
+        top_topics = evaluated_topics[:10]
+        _set_node('select', 'completed', len(top_topics))
+        _update_stage('select', 'completed', total=len(evaluated_topics), completed=len(top_topics))
+        logger.info(f"精选完成: Top{len(top_topics)} 话题进入写作")
 
-        # ===== Stage 3-7: WorkflowExecutor处理 (collect/analyze/plan/write/check) =====
-        _set_node('collect', 'running')
-        _update_stage('workflow', 'running', total=len(topics))
+        if not top_topics:
+            agent_state['error'] = '没有通过评估的话题，无法生成文章'
+            return
 
-        workflow_executor = WorkflowExecutor(db, batch_id, max_workers=5)
-        await workflow_executor.create_workflows(topics)
+        # ===== Stage 5: 写作 (并行生成文章) =====
+        _set_node('write', 'running')
+        _update_stage('write', 'running', total=len(top_topics))
 
-        # 启动并等待所有workflow完成
-        await workflow_executor.run()
+        llm_config = LLMConfigLoader.get_config(db, 'article_generation')
+        generator = ArticleGenerator(config=llm_config)
 
-        # 获取汇总
-        summary = workflow_executor.get_summary()
-        logger.info(f"Workflow summary: {summary['completed']}/{summary['total']} completed")
+        write_tasks = []
+        for i, topic in enumerate(top_topics):
+            tid = f"write_{i}"
+            _register_task(tid, 'write', topic.get('title', '')[:30])
+            _update_task(tid, 'running')
+            llm_log = LLMLogger(tid, batch_id)
+            write_tasks.append({
+                'fn': write_article_async,
+                'args': (topic, generator, batch_id, llm_log),
+                'id': tid, '_logger': llm_log
+            })
 
-        agent_state['articles_generated'] = summary['completed']
-        _set_node('check', 'completed', summary['completed'])
-        _update_stage('workflow', 'completed', total=summary['total'], completed=summary['completed'], failed=summary['failed'])
+        write_executor = ParallelExecutor(max_concurrency=5)
+        write_results = await write_executor.run(write_tasks)
 
-        # ===== Stage 8: Compose WeChat Draft =====
-        _set_node('compose', 'running')
-        draft_id = await compose_wechat_draft(db, batch_id)
-        if draft_id:
-            logger.info(f"Created wechat draft {draft_id}")
-            _set_node('compose', 'completed', 1)
-        else:
-            logger.warning("Failed to create wechat draft")
-            _set_node('compose', 'completed', 0)
+        articles_done = 0
+        for r in write_results:
+            _update_task(r['id'], 'completed' if not r['error'] else 'failed', r.get('error'))
+            if r['result']:
+                articles_done += 1
+
+        agent_state['articles_generated'] = articles_done
+        _set_node('write', 'completed', articles_done)
+        _update_stage('write', 'completed', total=len(top_topics), completed=articles_done)
+        logger.info(f"写作完成: {articles_done}/{len(top_topics)} 篇文章生成")
 
     except Exception as e:
         agent_state['error'] = str(e)
         if agent_state['current_node']:
             agent_state['nodes'][agent_state['current_node']]['status'] = 'failed'
-        logger.error(f"Agent pipeline error: {e}")
+        logger.error(f"Agent pipeline error: {e}", exc_info=True)
     finally:
         agent_state['running'] = False
         agent_state['finished_at'] = datetime.now().isoformat()
@@ -2600,16 +2643,6 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
-
-@app.route('/wechat-editor-demo')
-def wechat_editor_demo():
-    """微信编辑器Demo页面"""
-    return render_template('wechat-editor-demo.html')
-
-@app.route('/publish-preview-test')
-def publish_preview_test():
-    """发布预览组件测试页面"""
-    return render_template('publish-preview-test.html')
 
 @app.route('/api/upload/wechat-image', methods=['POST'])
 def upload_wechat_image():

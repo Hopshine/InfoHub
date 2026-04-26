@@ -88,9 +88,9 @@
 /* Main Content Area */
 .main-content {
   margin-left: 220px;
-  margin-top: 56px;
-  padding: var(--spacing-xl);
-  min-height: calc(100vh - 56px);
+  margin-top: 0;
+  padding: 16px 20px;
+  min-height: 100vh;
 }
 
 .content-wrapper {

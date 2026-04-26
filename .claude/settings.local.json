@@ -90,7 +90,8 @@
       "Bash(ollama list *)",
       "Bash(sqlite3 data/demo.db \".schema hotnews\")",
       "Bash(pkill -f \"tail -f logs\")",
-      "Bash(awk '{print $NF}')"
+      "Bash(awk '{print $NF}')",
+      "Bash(node -c static/js/components/wechat-editor.js)"
     ]
   }
 }

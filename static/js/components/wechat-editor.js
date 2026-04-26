@@ -169,6 +169,9 @@
             html = '<p>' + html + '</p>';
         }
 
+        return html;
+    }
+
     // 内容变化回调
     function handleContentChange() {
         if (window.wechatEditor.onChange) {

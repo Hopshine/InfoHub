@@ -3,11 +3,11 @@
 .settings-container {
   max-width: 1200px;
   margin: 0 auto;
-  padding: var(--spacing-2xl);
+  padding: 0;
 }
 
 .settings-header {
-  margin-bottom: var(--spacing-2xl);
+  margin-bottom: var(--spacing-lg);
 }
 
 .settings-header h1 {

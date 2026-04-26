@@ -17,8 +17,8 @@ const AgentDetailPanel = (() => {
       return;
     }
 
-    // 特殊处理：scan和evaluate节点
-    if (workflowId === 'scan' || workflowId === 'evaluate') {
+    // 特殊处理：scan、collect、analyze、select节点
+    if (workflowId === 'scan' || workflowId === 'collect' || workflowId === 'analyze' || workflowId === 'select') {
       try {
         const resp = await fetch(`/api/agent/status/detailed`);
         const data = await resp.json();

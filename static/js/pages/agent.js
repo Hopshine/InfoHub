@@ -8,12 +8,10 @@ const AgentPage = (() => {
 
   const PIPELINE_STEPS = [
     { key: 'scan', label: '扫描', icon: '📡' },
-    { key: 'evaluate', label: '评估', icon: '🔍' },
     { key: 'collect', label: '采集', icon: '📥' },
-    { key: 'analyze', label: '分析', icon: '🧠' },
-    { key: 'plan', label: '策划', icon: '💡' },
-    { key: 'write', label: '生成', icon: '✍️' },
-    { key: 'check', label: '检查', icon: '👁️' }
+    { key: 'analyze', label: '分析评估', icon: '🧠' },
+    { key: 'select', label: '精选', icon: '🎯' },
+    { key: 'write', label: '生成', icon: '✍️' }
   ];
 
   function render() {

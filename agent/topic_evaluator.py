@@ -40,6 +40,9 @@ class TopicEvaluator:
 热度值：{hot_value}
 链接：{url}
 
+内容摘要：
+{content_preview}
+
 请从5个维度进行评分，并给出详细理由。返回JSON格式：
 {{
   "scores": {{
@@ -126,7 +129,7 @@ class TopicEvaluator:
         评估话题 - 必须使用LLM，不降级
 
         Args:
-            topic: 话题信息 {title, platform, hot_value, url}
+            topic: 话题信息 {title, platform, hot_value, url, _content(optional)}
             llm_logger: LLM日志记录器
 
         Returns:
@@ -140,12 +143,17 @@ class TopicEvaluator:
 
         start_time = time.time()
 
+        # 提取内容摘要（最多800字）
+        content = topic.get('_content', '') or ''
+        content_preview = content[:800].strip() if content else '（暂无内容）'
+
         # 构建提示词
         prompt = self.EVALUATION_PROMPT.format(
             title=topic.get('title', ''),
             platform=topic.get('platform', '未知'),
             hot_value=topic.get('hot_value', '0'),
-            url=topic.get('url', '无')
+            url=topic.get('url', '无'),
+            content_preview=content_preview
         )
 
         provider = self.config['provider_type']

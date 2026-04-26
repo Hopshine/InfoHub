@@ -1,7 +1,7 @@
 /* Agent Page Styles */
 
 .agent-container {
-  padding: var(--spacing-xl);
+  padding: 0;
 }
 
 .agent-header {

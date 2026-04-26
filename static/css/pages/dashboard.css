@@ -1,20 +1,26 @@
 /* Dashboard Page Styles */
 
 .dashboard-container {
-  padding: var(--spacing-xl);
+  padding: 0;
 }
 
 .dashboard-header {
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: var(--spacing-xl);
-  flex-wrap: wrap;
+  align-items: center;
+  margin-bottom: var(--spacing-lg);
   gap: var(--spacing-md);
 }
 
+.dashboard-title {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 .dashboard-title h2 {
-  margin-bottom: var(--spacing-sm);
+  margin: 0;
+  font-size: 18px;
 }
 
 .dashboard-status {
@@ -23,6 +29,7 @@
   gap: var(--spacing-md);
   font-size: var(--font-size-sm);
   color: var(--color-gray-500);
+  flex-wrap: wrap;
 }
 
 .status-badge {
@@ -49,6 +56,8 @@
 .dashboard-actions {
   display: flex;
   gap: var(--spacing-sm);
+  align-items: center;
+  flex-shrink: 0;
 }
 
 /* Platform Tabs */

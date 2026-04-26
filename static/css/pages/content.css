@@ -1,7 +1,7 @@
 /* Content Page Styles */
 
 .content-container {
-  padding: var(--spacing-xl);
+  padding: 0;
 }
 
 .content-header {
