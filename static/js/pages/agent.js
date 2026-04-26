@@ -88,7 +88,7 @@ const AgentPage = (() => {
     stopPolling();
     statusTimer = setInterval(async () => {
       await loadStatus();
-    }, 3000);
+    }, 1500); // 1.5秒轮询一次，更及时
   }
 
   function stopPolling() {
@@ -106,20 +106,36 @@ const AgentPage = (() => {
         window._lastAgentData = data.data;
         renderStatus(data.data);
 
+        // 更新运行按钮状态
+        const btn = document.getElementById('agent-run-btn');
+        if (btn) {
+          btn.disabled = data.data.running;
+          btn.textContent = data.data.running ? '运行中...' : '手动运行';
+        }
+
         // 统计摘要
         const statsSummary = document.getElementById('agent-stats-summary');
         if (statsSummary && typeof AgentFlowVisualizer !== 'undefined') {
           AgentFlowVisualizer.renderStatsSummary(statsSummary, data.data);
         }
 
-        // DAG可视化 - 需要workflows数据
-        if (data.data.batch_id) {
-          const workflowResp = await fetch(`/api/agent/workflows/${data.data.batch_id}`);
-          const workflowData = await workflowResp.json();
-          if (workflowData.success) {
-            const dagContainer = document.getElementById('agent-dag-container');
-            if (dagContainer && typeof AgentDAGVisualizer !== 'undefined') {
-              AgentDAGVisualizer.render(dagContainer, workflowData.data);
+        // DAG可视化 - 有batch_id时渲染workflow DAG
+        const dagContainer = document.getElementById('agent-dag-container');
+        if (dagContainer && typeof AgentDAGVisualizer !== 'undefined') {
+          if (data.data.batch_id) {
+            try {
+              const workflowResp = await fetch(`/api/agent/workflows/${data.data.batch_id}`);
+              const workflowData = await workflowResp.json();
+              if (workflowData.success) {
+                AgentDAGVisualizer.render(dagContainer, workflowData.data);
+              }
+            } catch (e) {
+              console.error('加载workflow数据失败:', e);
+            }
+          } else if (data.data.running) {
+            // Agent刚启动，还没有batch_id，显示加载中
+            if (!dagContainer.querySelector('svg')) {
+              dagContainer.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:200px;color:#9ca3af;">Agent运行中，等待数据...</div>';
             }
           }
         }
@@ -302,14 +318,16 @@ const AgentPage = (() => {
       });
       const data = await resp.json();
       if (data.success) {
+        // 立即开始轮询
         startPolling();
-        await loadStatus();
+        // 延迟500ms再加载状态，让后端有时间初始化
+        setTimeout(() => loadStatus(), 500);
       } else {
         alert('运行失败: ' + (data.error || '未知错误'));
+        if (btn) { btn.disabled = false; btn.textContent = '手动运行'; }
       }
     } catch (e) {
       alert('运行失败: ' + e.message);
-    } finally {
       if (btn) { btn.disabled = false; btn.textContent = '手动运行'; }
     }
   }

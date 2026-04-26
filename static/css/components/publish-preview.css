@@ -1,0 +1,290 @@
+/* 发布预览组件样式 */
+.publish-preview-container {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+
+.preview-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 20px;
+    background: #fff;
+    border-bottom: 1px solid #e5e5e5;
+}
+
+.preview-header h3 {
+    margin: 0;
+    font-size: 18px;
+    color: #333;
+}
+
+.close-preview-btn {
+    background: none;
+    border: none;
+    font-size: 28px;
+    color: #999;
+    cursor: pointer;
+    padding: 0;
+    width: 30px;
+    height: 30px;
+    line-height: 1;
+}
+
+.close-preview-btn:hover {
+    color: #333;
+}
+
+.preview-content {
+    flex: 1;
+    overflow-y: auto;
+    background: #f5f5f5;
+    padding: 40px 20px;
+    display: flex;
+    justify-content: center;
+}
+
+/* 微信手机框架 */
+.wechat-preview-wrapper {
+    display: flex;
+    justify-content: center;
+}
+
+.wechat-phone-frame {
+    width: 375px;
+    background: #fff;
+    border-radius: 20px;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+    overflow: hidden;
+    max-height: 667px;
+}
+
+.wechat-status-bar {
+    height: 20px;
+    background: #000;
+    color: #fff;
+    font-size: 12px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0 10px;
+}
+
+.wechat-header {
+    height: 44px;
+    background: #ededed;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 15px;
+    border-bottom: 1px solid #d9d9d9;
+}
+
+.wechat-header .back-btn,
+.wechat-header .more-btn {
+    font-size: 20px;
+    color: #000;
+    cursor: pointer;
+}
+
+.wechat-header .title {
+    font-size: 16px;
+    font-weight: 500;
+    color: #000;
+}
+
+.wechat-article-list {
+    max-height: 550px;
+    overflow-y: auto;
+    background: #fff;
+}
+
+/* 第一篇文章（大图样式） */
+.wechat-article-item.first-article {
+    position: relative;
+    cursor: pointer;
+}
+
+.wechat-article-item.first-article .article-cover {
+    width: 100%;
+    height: 200px;
+    background-size: cover;
+    background-position: center;
+    background-color: #f0f0f0;
+}
+
+.wechat-article-item.first-article .article-title {
+    padding: 15px;
+    font-size: 16px;
+    font-weight: 500;
+    color: #333;
+    line-height: 1.5;
+    background: #fff;
+    border-bottom: 1px solid #e5e5e5;
+}
+
+/* 其他文章（小图样式） */
+.wechat-article-item {
+    display: flex;
+    padding: 15px;
+    border-bottom: 1px solid #e5e5e5;
+    cursor: pointer;
+}
+
+.wechat-article-item:hover {
+    background: #f9f9f9;
+}
+
+.wechat-article-item .article-info {
+    flex: 1;
+    padding-right: 10px;
+}
+
+.wechat-article-item .article-title {
+    font-size: 14px;
+    color: #333;
+    line-height: 1.4;
+    margin-bottom: 5px;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.wechat-article-item .article-summary {
+    font-size: 12px;
+    color: #999;
+    line-height: 1.3;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.wechat-article-item .article-thumb {
+    width: 80px;
+    height: 80px;
+    background-size: cover;
+    background-position: center;
+    background-color: #f0f0f0;
+    border-radius: 4px;
+    flex-shrink: 0;
+}
+
+/* 预览操作区 */
+.preview-actions {
+    padding: 20px;
+    background: #fff;
+    border-top: 1px solid #e5e5e5;
+}
+
+/* 发布进度 */
+.publish-progress {
+    margin-bottom: 15px;
+}
+
+.progress-bar {
+    width: 100%;
+    height: 8px;
+    background: #e5e5e5;
+    border-radius: 4px;
+    overflow: hidden;
+    margin-bottom: 10px;
+}
+
+.progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #07c160 0%, #06ae56 100%);
+    transition: width 0.3s ease;
+    border-radius: 4px;
+}
+
+.progress-text {
+    text-align: center;
+    font-size: 14px;
+    color: #666;
+}
+
+/* 错误提示 */
+.error-message {
+    display: flex;
+    align-items: center;
+    padding: 12px;
+    background: #fff3f3;
+    border: 1px solid #ffccc7;
+    border-radius: 4px;
+    margin-bottom: 15px;
+}
+
+.error-icon {
+    font-size: 18px;
+    margin-right: 8px;
+}
+
+.error-text {
+    flex: 1;
+    font-size: 14px;
+    color: #d32f2f;
+}
+
+.retry-btn {
+    padding: 5px 15px;
+    background: #fff;
+    border: 1px solid #d32f2f;
+    color: #d32f2f;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 13px;
+}
+
+.retry-btn:hover {
+    background: #fff5f5;
+}
+
+/* 操作按钮 */
+.action-buttons {
+    display: flex;
+    gap: 10px;
+}
+
+.action-buttons button {
+    flex: 1;
+    padding: 12px;
+    border: none;
+    border-radius: 4px;
+    font-size: 15px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.btn-secondary {
+    background: #fff;
+    border: 1px solid #d9d9d9;
+    color: #333;
+}
+
+.btn-secondary:hover {
+    background: #f5f5f5;
+}
+
+.btn-primary {
+    background: #07c160;
+    color: #fff;
+}
+
+.btn-primary:hover {
+    background: #06ae56;
+}
+
+.btn-primary:active {
+    background: #059048;
+}
+

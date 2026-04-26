@@ -2,17 +2,51 @@
 (function() {
 let currentDraft = null;
 let drafts = [];
+let collections = [];
+let selectedDrafts = new Set();
+let currentView = 'drafts';
+let draggedItem = null;
+let currentCollection = null;
+let collectionArticles = [];
 
 function render() {
     return `
         <div class="creation-container">
             <div class="creation-layout">
                 <div class="creation-sidebar">
-                    <div class="sidebar-header">
-                        <h3>草稿列表</h3>
-                        <button class="btn btn-primary btn-sm" onclick="creationPage.newDraft()">新建</button>
+                    <div class="collection-tabs">
+                        <div class="collection-tab ${currentView === 'drafts' ? 'active' : ''}"
+                             data-view="drafts"
+                             onclick="creationPage.switchView('drafts', this)">
+                            草稿列表
+                        </div>
+                        <div class="collection-tab ${currentView === 'collections' ? 'active' : ''}"
+                             data-view="collections"
+                             onclick="creationPage.switchView('collections', this)">
+                            合集管理
+                        </div>
                     </div>
-                    <div id="drafts-list" class="drafts-list">
+
+                    <div class="sidebar-header">
+                        <h3 id="sidebar-title">草稿列表</h3>
+                        <button class="btn btn-primary btn-sm" onclick="creationPage.handleNewAction()">
+                            <span id="new-btn-text">新建</span>
+                        </button>
+                    </div>
+
+                    <div id="batch-toolbar" class="batch-toolbar" style="display: none;">
+                        <span class="selected-count">已选择 <strong id="selected-count">0</strong> 篇</span>
+                        <div class="batch-actions">
+                            <button class="btn btn-sm btn-primary" onclick="creationPage.createCollectionFromSelection()">
+                                创建合集
+                            </button>
+                            <button class="btn btn-sm" onclick="creationPage.clearSelection()">
+                                取消选择
+                            </button>
+                        </div>
+                    </div>
+
+                    <div id="content-list" class="drafts-list">
                         <div class="loading">加载中...</div>
                     </div>
                 </div>
@@ -31,7 +65,8 @@ function render() {
                     <div class="creation-editor">
                         <div class="editor-panel" id="editor-panel">
                             <input type="text" id="article-title" class="article-title-input" placeholder="请输入标题...">
-                            <textarea id="article-content" class="article-content-input" placeholder="请输入内容（支持Markdown）..."></textarea>
+                            <div id="wechat-toolbar"></div>
+                            <div id="wechat-editor" style="height: 500px; overflow-y: auto;"></div>
                         </div>
 
                         <div class="preview-panel" id="preview-panel" style="display: none;">
@@ -57,16 +92,171 @@ function render() {
                 </div>
             </div>
         </div>
+
+        <!-- 合集创建/编辑模态框 -->
+        <div id="collection-modal" class="modal" style="display: none;">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3 id="collection-modal-title">创建合集</h3>
+                    <span class="close" onclick="creationPage.closeCollectionModal()">&times;</span>
+                </div>
+                <div class="modal-body">
+                    <form class="collection-form" id="collection-form" onsubmit="return false;">
+                        <div class="form-group">
+                            <label>合集标题 *</label>
+                            <input type="text" id="collection-title" placeholder="请输入合集标题" required>
+                        </div>
+                        <div class="form-group">
+                            <label>合集描述</label>
+                            <textarea id="collection-desc" placeholder="请输入合集描述（可选）"></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label>封面图片URL</label>
+                            <input type="text" id="collection-cover" placeholder="请输入封面图片URL（可选）">
+                        </div>
+                        <div class="form-group">
+                            <label>合集文章（拖拽调整顺序，2-8篇）*</label>
+                            <div id="collection-articles-list" class="collection-articles">
+                                <div class="empty-state">暂未选择文章</div>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px;">
+                                <span class="form-hint" id="article-count-hint">已选择 0 篇（需2-8篇）</span>
+                                <button type="button" class="btn btn-sm" onclick="creationPage.openArticleSelector()">添加文章</button>
+                            </div>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn" onclick="creationPage.closeCollectionModal()">取消</button>
+                    <button class="btn btn-primary" onclick="creationPage.saveCollection()">保存</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 文章选择弹窗 -->
+        <div id="article-selector-modal" class="modal" style="display: none;">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>选择文章</h3>
+                    <span class="close" onclick="creationPage.closeArticleSelector()">&times;</span>
+                </div>
+                <div class="modal-body">
+                    <div id="draft-selector-list" class="draft-select-list">
+                        <div class="loading">加载中...</div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn" onclick="creationPage.closeArticleSelector()">取消</button>
+                    <button class="btn btn-primary" onclick="creationPage.confirmArticleSelection()">确认</button>
+                </div>
+            </div>
+        </div>
     `;
 }
 
 function init() {
     loadDrafts();
+    loadCollections();
+
+    // 初始化wangEditor
+    if (window.wechatEditor) {
+        window.wechatEditor.init('#wechat-editor', '#wechat-toolbar');
+
+        // 监听内容变化
+        window.wechatEditor.onChange = function(content) {
+            if (currentDraft) {
+                currentDraft.content_wechat = content;
+            }
+        };
+    }
+
     setupAutoSave();
 }
 
+function switchView(view, el) {
+    currentView = view;
+    selectedDrafts.clear();
+
+    const sidebarTitle = document.getElementById('sidebar-title');
+    const newBtnText = document.getElementById('new-btn-text');
+    const batchToolbar = document.getElementById('batch-toolbar');
+
+    if (view === 'drafts') {
+        sidebarTitle.textContent = '草稿列表';
+        newBtnText.textContent = '新建';
+        displayDrafts();
+    } else {
+        sidebarTitle.textContent = '合集管理';
+        newBtnText.textContent = '新建合集';
+        batchToolbar.style.display = 'none';
+        displayCollections();
+    }
+
+    if (el) {
+        document.querySelectorAll('.collection-tab').forEach(tab => tab.classList.remove('active'));
+        el.classList.add('active');
+    }
+}
+
+function handleNewAction() {
+    if (currentView === 'drafts') {
+        newDraft();
+    } else {
+        openCollectionModal();
+    }
+}
+
+async function loadCollections() {
+    try {
+        const response = await fetch('/api/collections');
+        const result = await response.json();
+
+        if (result.success) {
+            collections = result.data || [];
+            if (currentView === 'collections') {
+                displayCollections();
+            }
+        }
+    } catch (error) {
+        console.error('加载合集失败:', error);
+    }
+}
+
+function displayCollections() {
+    const listElement = document.getElementById('content-list');
+    listElement.className = 'collections-list';
+
+    if (collections.length === 0) {
+        listElement.innerHTML = '<div class="empty-state">暂无合集</div>';
+        return;
+    }
+
+    const html = collections.map(collection => `
+        <div class="collection-item">
+            <div class="collection-title">${escapeHtml(collection.title)}</div>
+            <div class="collection-desc">${escapeHtml(collection.description || '暂无描述')}</div>
+            <div class="collection-meta">
+                <span>${collection.article_count || 0} 篇文章</span>
+                <span class="collection-status ${collection.status || 'draft'}">
+                    ${collection.status === 'published' ? '已发布' : '草稿'}
+                </span>
+            </div>
+            <div class="collection-actions">
+                <button class="btn btn-sm" onclick="creationPage.editCollection(${collection.id})">编辑</button>
+                <button class="btn btn-sm btn-success" onclick="creationPage.publishCollection(${collection.id})">
+                    ${collection.status === 'published' ? '取消发布' : '发布'}
+                </button>
+                <button class="btn btn-sm btn-danger" onclick="creationPage.deleteCollection(${collection.id})">删除</button>
+            </div>
+        </div>
+    `).join('');
+
+    listElement.innerHTML = html;
+}
+
 async function loadDrafts() {
-    const listElement = document.getElementById('drafts-list');
+    const listElement = document.getElementById('content-list');
+    listElement.className = 'drafts-list';
     listElement.innerHTML = '<div class="loading">加载中...</div>';
 
     try {
@@ -84,38 +274,382 @@ async function loadDrafts() {
 }
 
 function displayDrafts() {
-    const listElement = document.getElementById('drafts-list');
+    const listElement = document.getElementById('content-list');
+    listElement.className = 'drafts-list';
 
     if (drafts.length === 0) {
         listElement.innerHTML = '<div class="empty-state">暂无草稿</div>';
+        updateBatchToolbar();
         return;
     }
 
-    const html = drafts.map(draft => `
-        <div class="draft-item ${currentDraft && currentDraft.id === draft.id ? 'active' : ''}"
+    const html = drafts.map(draft => {
+        const isSelected = selectedDrafts.has(draft.id);
+        const source = draft.source_type || 'manual';
+        return `
+        <div class="draft-item ${currentDraft && currentDraft.id === draft.id ? 'active' : ''} ${isSelected ? 'selected' : ''}"
              onclick="creationPage.loadDraft(${draft.id})">
-            <div class="draft-title">${escapeHtml(draft.title || '未命名')}</div>
-            <div class="draft-meta">
-                <span class="draft-date">${formatDate(draft.updated_at)}</span>
-                <button class="btn-icon" onclick="event.stopPropagation(); creationPage.deleteDraft(${draft.id})">
-                    <span>×</span>
-                </button>
+            <input type="checkbox" class="draft-checkbox"
+                   ${isSelected ? 'checked' : ''}
+                   onclick="event.stopPropagation(); creationPage.toggleDraftSelection(${draft.id})">
+            <div class="draft-content">
+                <div class="draft-title">${escapeHtml(draft.title || '未命名')}</div>
+                <div class="draft-meta">
+                    <span class="draft-source-tag ${source}">${source === 'agent' ? 'Agent' : '手动'}</span>
+                    <span class="draft-date">${formatDate(draft.updated_at)}</span>
+                    <button class="btn-icon" onclick="event.stopPropagation(); creationPage.deleteDraft(${draft.id})">
+                        <span>×</span>
+                    </button>
+                </div>
             </div>
+        </div>
+    `;}).join('');
+
+    listElement.innerHTML = html;
+    updateBatchToolbar();
+}
+
+function toggleDraftSelection(draftId) {
+    if (selectedDrafts.has(draftId)) {
+        selectedDrafts.delete(draftId);
+    } else {
+        selectedDrafts.add(draftId);
+    }
+    displayDrafts();
+}
+
+function clearSelection() {
+    selectedDrafts.clear();
+    displayDrafts();
+}
+
+function updateBatchToolbar() {
+    const toolbar = document.getElementById('batch-toolbar');
+    const countElement = document.getElementById('selected-count');
+    if (!toolbar) return;
+
+    if (selectedDrafts.size > 0 && currentView === 'drafts') {
+        toolbar.style.display = 'flex';
+        countElement.textContent = selectedDrafts.size;
+    } else {
+        toolbar.style.display = 'none';
+    }
+}
+
+function createCollectionFromSelection() {
+    if (selectedDrafts.size < 2) {
+        alert('请至少选择2篇文章');
+        return;
+    }
+    if (selectedDrafts.size > 8) {
+        alert('合集最多包含8篇文章');
+        return;
+    }
+
+    const selectedIds = Array.from(selectedDrafts);
+    collectionArticles = drafts.filter(d => selectedIds.includes(d.id));
+    openCollectionModal();
+}
+
+// 合集弹窗管理
+function openCollectionModal(collection) {
+    currentCollection = collection || null;
+    const modal = document.getElementById('collection-modal');
+    const title = document.getElementById('collection-modal-title');
+
+    if (collection) {
+        title.textContent = '编辑合集';
+        document.getElementById('collection-title').value = collection.title || '';
+        document.getElementById('collection-desc').value = collection.description || '';
+        document.getElementById('collection-cover').value = collection.cover_image || '';
+        collectionArticles = (collection.articles || []).slice();
+    } else {
+        title.textContent = '创建合集';
+        document.getElementById('collection-title').value = '';
+        document.getElementById('collection-desc').value = '';
+        document.getElementById('collection-cover').value = '';
+    }
+
+    renderCollectionArticles();
+    modal.style.display = 'flex';
+}
+
+function closeCollectionModal() {
+    document.getElementById('collection-modal').style.display = 'none';
+    currentCollection = null;
+    collectionArticles = [];
+}
+
+function renderCollectionArticles() {
+    const container = document.getElementById('collection-articles-list');
+    const hint = document.getElementById('article-count-hint');
+    const count = collectionArticles.length;
+
+    hint.textContent = `已选择 ${count} 篇（需2-8篇）`;
+    hint.className = 'form-hint' + ((count < 2 || count > 8) ? ' error' : '');
+
+    if (count === 0) {
+        container.innerHTML = '<div class="empty-state">暂未选择文章</div>';
+        return;
+    }
+
+    const html = collectionArticles.map((article, index) => `
+        <div class="collection-article-item"
+             draggable="true"
+             data-index="${index}"
+             ondragstart="creationPage.handleDragStart(event, ${index})"
+             ondragover="creationPage.handleDragOver(event)"
+             ondragleave="creationPage.handleDragLeave(event)"
+             ondrop="creationPage.handleDrop(event, ${index})"
+             ondragend="creationPage.handleDragEnd(event)">
+            <span class="drag-handle">⋮⋮</span>
+            <span class="article-order">${index + 1}</span>
+            <span class="article-title-text">${escapeHtml(article.title || '未命名')}</span>
+            <button class="article-remove" onclick="creationPage.removeArticleFromCollection(${index})">×</button>
         </div>
     `).join('');
 
-    listElement.innerHTML = html;
+    container.innerHTML = html;
 }
 
+// 拖拽排序
+function handleDragStart(e, index) {
+    draggedItem = index;
+    e.currentTarget.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+}
+
+function handleDragOver(e) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    e.currentTarget.classList.add('drag-over');
+    return false;
+}
+
+function handleDragLeave(e) {
+    e.currentTarget.classList.remove('drag-over');
+}
+
+function handleDrop(e, targetIndex) {
+    e.preventDefault();
+    e.stopPropagation();
+    e.currentTarget.classList.remove('drag-over');
+
+    if (draggedItem === null || draggedItem === targetIndex) {
+        return false;
+    }
+
+    const item = collectionArticles.splice(draggedItem, 1)[0];
+    collectionArticles.splice(targetIndex, 0, item);
+    renderCollectionArticles();
+    return false;
+}
+
+function handleDragEnd(e) {
+    document.querySelectorAll('.collection-article-item').forEach(item => {
+        item.classList.remove('dragging', 'drag-over');
+    });
+    draggedItem = null;
+}
+
+function removeArticleFromCollection(index) {
+    collectionArticles.splice(index, 1);
+    renderCollectionArticles();
+}
+
+// 文章选择器
+let tempSelectedArticles = new Set();
+
+function openArticleSelector() {
+    tempSelectedArticles = new Set(collectionArticles.map(a => a.id));
+    document.getElementById('article-selector-modal').style.display = 'flex';
+    renderDraftSelector();
+}
+
+function closeArticleSelector() {
+    document.getElementById('article-selector-modal').style.display = 'none';
+}
+
+function renderDraftSelector() {
+    const container = document.getElementById('draft-selector-list');
+
+    if (drafts.length === 0) {
+        container.innerHTML = '<div class="empty-state">暂无草稿</div>';
+        return;
+    }
+
+    const html = drafts.map(draft => {
+        const isSelected = tempSelectedArticles.has(draft.id);
+        const source = draft.source || 'manual';
+        return `
+            <div class="draft-select-item ${isSelected ? 'selected' : ''}"
+                 onclick="creationPage.toggleTempSelection(${draft.id})">
+                <input type="checkbox" ${isSelected ? 'checked' : ''} onclick="event.stopPropagation()">
+                <div style="flex: 1; min-width: 0;">
+                    <div class="draft-title">${escapeHtml(draft.title || '未命名')}</div>
+                    <div class="draft-meta">
+                        <span class="draft-source-tag ${source}">${source === 'agent' ? 'Agent' : '手动'}</span>
+                        <span>${formatDate(draft.updated_at)}</span>
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    container.innerHTML = html;
+}
+
+function toggleTempSelection(draftId) {
+    if (tempSelectedArticles.has(draftId)) {
+        tempSelectedArticles.delete(draftId);
+    } else {
+        if (tempSelectedArticles.size >= 8) {
+            alert('合集最多包含8篇文章');
+            return;
+        }
+        tempSelectedArticles.add(draftId);
+    }
+    renderDraftSelector();
+}
+
+function confirmArticleSelection() {
+    const selectedIds = Array.from(tempSelectedArticles);
+    const existing = collectionArticles.filter(a => selectedIds.includes(a.id));
+    const existingIds = new Set(existing.map(a => a.id));
+    const newArticles = drafts.filter(d => selectedIds.includes(d.id) && !existingIds.has(d.id));
+
+    collectionArticles = [...existing, ...newArticles];
+    closeArticleSelector();
+    renderCollectionArticles();
+}
+
+async function saveCollection() {
+    const title = document.getElementById('collection-title').value.trim();
+    const description = document.getElementById('collection-desc').value.trim();
+    const cover_image = document.getElementById('collection-cover').value.trim();
+
+    if (!title) {
+        alert('请输入合集标题');
+        return;
+    }
+
+    if (collectionArticles.length < 2 || collectionArticles.length > 8) {
+        alert('合集必须包含2-8篇文章');
+        return;
+    }
+
+    const articleIds = collectionArticles.map(a => a.id);
+    const payload = { title, description, cover_image, article_ids: articleIds };
+
+    try {
+        const url = currentCollection
+            ? `/api/collections/${currentCollection.id}`
+            : '/api/collections';
+        const method = currentCollection ? 'PUT' : 'POST';
+
+        const response = await fetch(url, {
+            method,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+            showToast(currentCollection ? '更新成功' : '创建成功', 'success');
+            closeCollectionModal();
+            selectedDrafts.clear();
+            await loadCollections();
+            if (currentView === 'drafts') {
+                displayDrafts();
+            }
+        } else {
+            alert('保存失败: ' + (result.error || '未知错误'));
+        }
+    } catch (error) {
+        console.error('保存合集失败:', error);
+        alert('保存失败');
+    }
+}
+
+async function editCollection(collectionId) {
+    try {
+        const response = await fetch(`/api/collections/${collectionId}`);
+        const result = await response.json();
+
+        if (result.success) {
+            openCollectionModal(result.data);
+        } else {
+            alert('加载合集失败');
+        }
+    } catch (error) {
+        console.error('加载合集失败:', error);
+        alert('加载合集失败');
+    }
+}
+
+async function deleteCollection(collectionId) {
+    if (!confirm('确定要删除这个合集吗？')) return;
+
+    try {
+        const response = await fetch(`/api/collections/${collectionId}`, { method: 'DELETE' });
+        const result = await response.json();
+
+        if (result.success) {
+            showToast('删除成功', 'success');
+            await loadCollections();
+        } else {
+            alert('删除失败: ' + (result.error || '未知错误'));
+        }
+    } catch (error) {
+        console.error('删除合集失败:', error);
+        alert('删除失败');
+    }
+}
+
+async function publishCollection(collectionId) {
+    const collection = collections.find(c => c.id === collectionId);
+    const willPublish = collection && collection.status !== 'published';
+    const confirmMsg = willPublish ? '确定要发布这个合集吗？' : '确定要取消发布吗？';
+
+    if (!confirm(confirmMsg)) return;
+
+    try {
+        const response = await fetch(`/api/collections/${collectionId}/publish`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ publish_now: willPublish })
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+            showToast(willPublish ? '发布成功' : '已取消发布', 'success');
+            await loadCollections();
+        } else {
+            alert('操作失败: ' + (result.error || '未知错误'));
+        }
+    } catch (error) {
+        console.error('发布合集失败:', error);
+        alert('操作失败');
+    }
+}
+
+// 原有草稿编辑逻辑
 function newDraft() {
     currentDraft = {
         id: null,
         title: '',
-        content: ''
+        content: '',
+        content_wechat: ''
     };
     document.getElementById('article-title').value = '';
-    document.getElementById('article-content').value = '';
-    displayDrafts();
+    if (window.wechatEditor) {
+        window.wechatEditor.clear();
+    }
+    if (currentView === 'drafts') {
+        displayDrafts();
+    }
 }
 
 async function loadDraft(draftId) {
@@ -126,9 +660,10 @@ async function loadDraft(draftId) {
         if (result.success) {
             currentDraft = result.data;
             document.getElementById('article-title').value = currentDraft.title || '';
-            document.getElementById('article-content').value = currentDraft.content || '';
+            if (window.wechatEditor) {
+                window.wechatEditor.setHtml(currentDraft.content_wechat || currentDraft.content || '');
+            }
             displayDrafts();
-            updatePreview();
         }
     } catch (error) {
         console.error('加载草稿失败:', error);
@@ -138,7 +673,8 @@ async function loadDraft(draftId) {
 
 async function saveDraft() {
     const title = document.getElementById('article-title').value.trim();
-    const content = document.getElementById('article-content').value.trim();
+    const content_wechat = window.wechatEditor ? window.wechatEditor.getHtml() : '';
+    const content = window.wechatEditor ? window.wechatEditor.getText() : '';
 
     if (!title && !content) {
         alert('请输入标题或内容');
@@ -155,7 +691,7 @@ async function saveDraft() {
         const response = await fetch(url, {
             method: method,
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ title, content })
+            body: JSON.stringify({ title, content, content_wechat })
         });
 
         const result = await response.json();
@@ -187,6 +723,7 @@ async function deleteDraft(draftId) {
             if (currentDraft && currentDraft.id === draftId) {
                 newDraft();
             }
+            selectedDrafts.delete(draftId);
             await loadDrafts();
             showToast('删除成功', 'success');
         } else {
@@ -212,7 +749,6 @@ async function loadHotspots() {
         const result = await response.json();
 
         if (result.success && result.data.trending) {
-            // 将trending对象转换为数组
             const hotspotsArray = [];
             Object.keys(result.data.trending).forEach(platform => {
                 const items = result.data.trending[platform];
@@ -277,8 +813,17 @@ async function selectHotspot(hotspotId) {
 
         if (result.success) {
             document.getElementById('article-title').value = result.data.title || '';
-            document.getElementById('article-content').value = result.data.content || '';
-            updatePreview();
+
+            const content = result.data.content || '';
+            if (window.wechatEditor) {
+                if (window.wechatEditor.isMarkdown(content)) {
+                    const html = window.wechatEditor.convertMarkdownToHtml(content);
+                    window.wechatEditor.setHtml(html);
+                } else {
+                    window.wechatEditor.setHtml(content);
+                }
+            }
+
             showToast('生成成功', 'success');
         } else {
             alert('生成失败: ' + result.error);
@@ -307,7 +852,12 @@ function togglePreview() {
         editorPanel.style.display = 'none';
         previewPanel.style.display = 'block';
         toggleText.textContent = '编辑';
-        updatePreview();
+
+        const title = document.getElementById('article-title').value;
+        const content = window.wechatEditor ? window.wechatEditor.getHtml() : '';
+
+        document.getElementById('preview-title').textContent = title || '标题预览';
+        document.getElementById('preview-content').innerHTML = `<div class="wechat-article">${content}</div>`;
     } else {
         editorPanel.style.display = 'block';
         previewPanel.style.display = 'none';
@@ -315,48 +865,34 @@ function togglePreview() {
     }
 }
 
-function updatePreview() {
-    const title = document.getElementById('article-title').value;
-    const content = document.getElementById('article-content').value;
-
-    document.getElementById('preview-title').textContent = title || '标题预览';
-    document.getElementById('preview-content').innerHTML = renderMarkdown(content);
-}
-
-function renderMarkdown(text) {
-    if (!text) return '<p class="empty-preview">内容预览</p>';
-
-    return text
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/^### (.*$)/gim, '<h3>$1</h3>')
-        .replace(/^## (.*$)/gim, '<h2>$1</h2>')
-        .replace(/^# (.*$)/gim, '<h1>$1</h1>')
-        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-        .replace(/\*(.*?)\*/g, '<em>$1</em>')
-        .replace(/\n\n/g, '</p><p>')
-        .replace(/\n/g, '<br>')
-        .replace(/^(.+)$/gim, '<p>$1</p>');
-}
-
 function setupAutoSave() {
     let autoSaveTimer;
-    const inputs = ['article-title', 'article-content'];
 
-    inputs.forEach(id => {
-        const element = document.getElementById(id);
-        if (element) {
-            element.addEventListener('input', () => {
-                clearTimeout(autoSaveTimer);
-                autoSaveTimer = setTimeout(() => {
-                    if (currentDraft && currentDraft.id) {
-                        saveDraft();
-                    }
-                }, 3000);
-            });
-        }
-    });
+    const triggerAutoSave = () => {
+        clearTimeout(autoSaveTimer);
+        autoSaveTimer = setTimeout(() => {
+            if (currentDraft && currentDraft.id) {
+                saveDraft();
+            }
+        }, 3000);
+    };
+
+    const titleEl = document.getElementById('article-title');
+    if (titleEl) {
+        titleEl.addEventListener('input', triggerAutoSave);
+    }
+
+    // 监听wangEditor变化
+    if (window.wechatEditor) {
+        const originalOnChange = window.wechatEditor.onChange;
+        window.wechatEditor.onChange = function(content) {
+            if (currentDraft) {
+                currentDraft.content_wechat = content;
+            }
+            if (originalOnChange) originalOnChange(content);
+            triggerAutoSave();
+        };
+    }
 }
 
 function formatDate(dateStr) {
@@ -408,10 +944,31 @@ function showToast(message, type = 'info') {
 window.creationPage = {
     render,
     init,
+    switchView,
+    handleNewAction,
     newDraft,
     loadDraft,
     saveDraft,
     deleteDraft,
+    toggleDraftSelection,
+    clearSelection,
+    createCollectionFromSelection,
+    openCollectionModal,
+    closeCollectionModal,
+    editCollection,
+    deleteCollection,
+    publishCollection,
+    saveCollection,
+    openArticleSelector,
+    closeArticleSelector,
+    toggleTempSelection,
+    confirmArticleSelection,
+    removeArticleFromCollection,
+    handleDragStart,
+    handleDragOver,
+    handleDragLeave,
+    handleDrop,
+    handleDragEnd,
     generateFromHotspot,
     selectHotspot,
     closeHotspotModal,

@@ -497,3 +497,75 @@
     gap: var(--spacing-sm);
   }
 }
+
+/* LLM Logs */
+.llm-log-item {
+  margin-bottom: var(--spacing-sm);
+  border: 1px solid var(--color-gray-200);
+  border-radius: var(--radius-sm);
+  background: var(--color-gray-50);
+}
+
+.llm-log-item summary {
+  padding: var(--spacing-sm) var(--spacing-md);
+  cursor: pointer;
+  display: flex;
+  gap: var(--spacing-sm);
+  align-items: center;
+  font-size: var(--font-size-sm);
+}
+
+.llm-log-item summary:hover {
+  background: var(--color-gray-100);
+}
+
+.llm-log-stage {
+  font-weight: 600;
+  color: var(--color-primary);
+}
+
+.llm-log-model {
+  color: var(--color-gray-600);
+  font-size: var(--font-size-xs);
+}
+
+.llm-log-duration,
+.llm-log-tokens {
+  color: var(--color-gray-500);
+  font-size: var(--font-size-xs);
+}
+
+.llm-log-content {
+  padding: var(--spacing-md);
+  border-top: 1px solid var(--color-gray-200);
+  background: var(--color-white);
+}
+
+.llm-log-section {
+  margin-bottom: var(--spacing-md);
+}
+
+.llm-log-section:last-child {
+  margin-bottom: 0;
+}
+
+.llm-log-section strong {
+  display: block;
+  margin-bottom: var(--spacing-xs);
+  color: var(--color-gray-700);
+  font-size: var(--font-size-sm);
+}
+
+.llm-log-section pre {
+  background: var(--color-gray-50);
+  border: 1px solid var(--color-gray-200);
+  border-radius: var(--radius-sm);
+  padding: var(--spacing-sm);
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  max-height: 300px;
+  overflow-y: auto;
+}

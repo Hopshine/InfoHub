@@ -60,10 +60,47 @@
   color: #fff;
 }
 
+/* DAG控制按钮 */
+.dag-controls {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  display: flex;
+  gap: 8px;
+  z-index: 10;
+}
+
+.dag-control-btn {
+  width: 36px;
+  height: 36px;
+  background: rgba(15, 15, 15, 0.9);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  border-radius: 6px;
+  color: #10b981;
+  font-size: 18px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+  backdrop-filter: blur(8px);
+}
+
+.dag-control-btn:hover {
+  background: rgba(16, 185, 129, 0.2);
+  border-color: #10b981;
+  transform: scale(1.05);
+}
+
+.dag-control-btn:active {
+  transform: scale(0.95);
+}
+
 .dag-canvas {
   flex: 1;
   position: relative;
-  overflow: auto;
+  overflow: hidden;
   background:
     radial-gradient(circle at 50% 50%, #0a0a0a 0%, #000 100%),
     linear-gradient(rgba(16, 185, 129, 0.03) 1px, transparent 1px),
@@ -71,11 +108,11 @@
   background-size: 100%, 24px 24px, 24px 24px;
 }
 
-.dag-svg {
+.dag-svg,
+.agent-dag-svg {
   width: 100%;
   height: 100%;
-  min-width: 800px;
-  min-height: 500px;
+  user-select: none;
 }
 
 /* ========== DAG节点样式 ========== */
@@ -322,18 +359,163 @@
 
 /* ========== 侧边栏 详情面板 ========== */
 .agent-detail-panel {
-  width: 30%;
-  min-width: 360px;
-  max-width: 480px;
-  background: rgba(15, 15, 15, 0.95);
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 40%;
+  min-width: 420px;
+  max-width: 560px;
+  background: rgba(15, 15, 15, 0.98);
   backdrop-filter: blur(12px);
-  border-left: 1px solid rgba(16, 185, 129, 0.2);
+  border-left: 1px solid rgba(16, 185, 129, 0.3);
   overflow-y: auto;
-  transform: translateX(0);
+  transform: translateX(100%);
   transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
   display: flex;
   flex-direction: column;
   box-shadow: -8px 0 24px rgba(0, 0, 0, 0.5);
+  z-index: 999;
+  color: #e5e7eb;
+}
+
+.agent-detail-panel.open {
+  transform: translateX(0);
+}
+
+/* 详情面板内部样式 */
+.agent-detail-panel .detail-header {
+  position: sticky;
+  top: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  background: rgba(15, 15, 15, 0.98);
+  border-bottom: 1px solid rgba(16, 185, 129, 0.2);
+  z-index: 10;
+}
+
+.agent-detail-panel .detail-header h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #f3f4f6;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-detail-panel .detail-header button {
+  background: transparent;
+  border: none;
+  color: #9ca3af;
+  font-size: 22px;
+  cursor: pointer;
+  padding: 4px 10px;
+  border-radius: 4px;
+  transition: all 0.2s;
+  line-height: 1;
+}
+
+.agent-detail-panel .detail-header button:hover {
+  background: rgba(239, 68, 68, 0.2);
+  color: #ef4444;
+}
+
+.agent-detail-panel .detail-section {
+  padding: 16px 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.agent-detail-panel .detail-section:last-child {
+  border-bottom: none;
+}
+
+.agent-detail-panel .detail-section h4 {
+  margin: 0 0 12px 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: #10b981;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+}
+
+.agent-detail-panel .detail-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 0;
+  font-size: 13px;
+}
+
+.agent-detail-panel .detail-item > span:first-child {
+  color: #9ca3af;
+  font-weight: 500;
+  font-size: 12px;
+}
+
+.agent-detail-panel .detail-item strong {
+  color: #f3f4f6;
+  font-weight: 500;
+}
+
+.agent-detail-panel details {
+  margin-top: 4px;
+}
+
+.agent-detail-panel details summary {
+  cursor: pointer;
+  padding: 8px 12px;
+  background: rgba(16, 185, 129, 0.1);
+  border: 1px solid rgba(16, 185, 129, 0.2);
+  border-radius: 6px;
+  font-size: 13px;
+  color: #10b981;
+  user-select: none;
+  transition: background 0.2s;
+}
+
+.agent-detail-panel details summary:hover {
+  background: rgba(16, 185, 129, 0.15);
+}
+
+.agent-detail-panel details[open] summary {
+  margin-bottom: 8px;
+}
+
+.agent-detail-panel details pre {
+  background: #1f2937;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  padding: 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #d1d5db;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  max-height: 300px;
+  overflow-y: auto;
+  margin: 0;
+}
+
+.agent-detail-panel .btn {
+  padding: 8px 16px;
+  border-radius: 6px;
+  border: 1px solid rgba(16, 185, 129, 0.4);
+  background: rgba(16, 185, 129, 0.15);
+  color: #10b981;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s;
+  margin-top: 8px;
+}
+
+.agent-detail-panel .btn:hover {
+  background: rgba(16, 185, 129, 0.25);
+  border-color: #10b981;
 }
 
 .agent-detail-panel.hidden {
