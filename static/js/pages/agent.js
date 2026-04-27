@@ -143,6 +143,8 @@ const AgentPage = (() => {
           await loadDrafts();
         } else {
           stopPolling();
+          // Agent 完成后再刷新一次草稿列表，确保显示最新结果
+          await loadDrafts();
         }
       }
     } catch (e) {

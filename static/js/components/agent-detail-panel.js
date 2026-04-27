@@ -17,8 +17,8 @@ const AgentDetailPanel = (() => {
       return;
     }
 
-    // 特殊处理：scan、collect、analyze、select节点
-    if (workflowId === 'scan' || workflowId === 'collect' || workflowId === 'analyze' || workflowId === 'select') {
+    // 特殊处理：scan、collect、analyze、select、write 节点
+    if (workflowId === 'scan' || workflowId === 'collect' || workflowId === 'analyze' || workflowId === 'select' || workflowId === 'write') {
       try {
         const resp = await fetch(`/api/agent/status/detailed`);
         const data = await resp.json();
@@ -76,6 +76,14 @@ const AgentDetailPanel = (() => {
     const stages = agentData.stages || {};
     const tasks = agentData.tasks || {};
     const llmLogs = agentData.llm_logs || [];
+
+    // 调试：打印所有任务的stage分布
+    const stageCounts = {};
+    Object.values(tasks).forEach(t => {
+      const s = t.stage || t.task_type || 'unknown';
+      stageCounts[s] = (stageCounts[s] || 0) + 1;
+    });
+    console.log('[DetailPanel] tasks by stage:', stageCounts, 'total:', Object.keys(tasks).length);
 
     if (nodeType === 'scan') {
       const scanStage = stages['scan'] || {};
@@ -249,6 +257,38 @@ const AgentDetailPanel = (() => {
       `;
     } else if (nodeType === 'analyze') {
       const analyzeStage = stages['analyze'] || {};
+      const collectTasks = Object.values(tasks).filter(t => t.stage === 'collect');
+
+      let passed = 0, rejected = 0, pending = 0;
+      const topicRows = [];
+      collectTasks.forEach((task) => {
+        let output = {};
+        try { if (task.output_data) output = JSON.parse(task.output_data); } catch (e) {}
+        const selected = output.selected === true;
+        if (task.status === 'running' || task.status === 'pending') pending += 1;
+        else if (selected) passed += 1;
+        else rejected += 1;
+
+        topicRows.push({
+          title: task.task_name || '未知话题',
+          score: output.total_score || 0,
+          grade: output.grade || '-',
+          selected,
+          summary: output.summary || ''
+        });
+      });
+
+      topicRows.sort((a, b) => (b.score || 0) - (a.score || 0));
+      const listHtml = topicRows.slice(0, 30).map((r, idx) => `
+        <div style="padding:8px;border-left:3px solid ${r.selected ? '#10b981' : '#6b7280'};margin-bottom:8px;background:#1f2937;border-radius:4px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+            <span style="color:#f3f4f6;font-size:13px;">${idx + 1}. ${escapeHtml(r.title)}</span>
+            <span style="color:${r.selected ? '#10b981' : '#9ca3af'};font-size:12px;">${r.score}分 / ${r.grade}</span>
+          </div>
+          ${r.summary ? `<div style="color:#9ca3af;font-size:11px;margin-top:4px;">${escapeHtml(r.summary)}</div>` : ''}
+        </div>
+      `).join('');
+
       panel.innerHTML = `
         <div class="detail-header">
           <h3>🧠 分析评估</h3>
@@ -256,11 +296,25 @@ const AgentDetailPanel = (() => {
         </div>
         <div class="detail-section">
           <div class="detail-item"><span>总计：</span><strong>${analyzeStage.total || 0}条</strong></div>
-          <div class="detail-item"><span>通过：</span><strong style="color:#10b981">${analyzeStage.completed || 0}条</strong></div>
+          <div class="detail-item"><span>通过：</span><strong style="color:#10b981">${analyzeStage.completed || passed || 0}条</strong></div>
+          <div class="detail-item"><span>拒绝：</span><strong style="color:#ef4444">${rejected}</strong></div>
+          <div class="detail-item"><span>待处理：</span><strong style="color:#f59e0b">${pending}</strong></div>
           <div class="detail-item"><span>状态：</span><strong>${analyzeStage.status || '未知'}</strong></div>
+        </div>
+        <div style="padding:8px 16px 0; overflow-y:auto; max-height:calc(100vh - 280px);">
+          <div style="margin-bottom:8px;color:#f3f4f6;font-size:13px;font-weight:600;">📋 评估明细（前30条）</div>
+          ${listHtml || '<p style="color:#9ca3af; text-align:center; padding:20px;">暂无明细</p>'}
         </div>`;
     } else if (nodeType === 'select') {
       const selectStage = stages['select'] || {};
+      const writeTasks = Object.values(tasks).filter(t => t.stage === 'write');
+
+      const selectedList = writeTasks.map((t, idx) => `
+        <div style="padding:8px;border-left:3px solid #10b981;margin-bottom:8px;background:#1f2937;border-radius:4px;">
+          <div style="color:#f3f4f6;font-size:13px;">${idx + 1}. ${escapeHtml(t.task_name || '未命名话题')}</div>
+        </div>
+      `).join('');
+
       panel.innerHTML = `
         <div class="detail-header">
           <h3>🎯 精选话题</h3>
@@ -268,8 +322,66 @@ const AgentDetailPanel = (() => {
         </div>
         <div class="detail-section">
           <div class="detail-item"><span>候选：</span><strong>${selectStage.total || 0}条</strong></div>
-          <div class="detail-item"><span>精选：</span><strong style="color:#10b981">${selectStage.completed || 0}条</strong></div>
-          <p style="color:#9ca3af; font-size:13px; margin-top:8px;">按评估总分排序，取Top 10进入写作阶段。</p>
+          <div class="detail-item"><span>精选：</span><strong style="color:#10b981">${selectStage.completed || writeTasks.length || 0}条</strong></div>
+          <p style="color:#9ca3af; font-size:13px; margin-top:8px;">按评估总分排序，取Top话题进入写作阶段。</p>
+        </div>
+        <div style="padding:8px 16px 0; overflow-y:auto; max-height:calc(100vh - 280px);">
+          <div style="margin-bottom:8px;color:#f3f4f6;font-size:13px;font-weight:600;">🏷️ 入选话题</div>
+          ${selectedList || '<p style="color:#9ca3af; text-align:center; padding:20px;">暂无入选话题</p>'}
+        </div>`;
+    } else if (nodeType === 'write') {
+      const writeStage = stages['write'] || {};
+      const writeTasks = Object.values(tasks).filter(t => t.stage === 'write');
+      const nodeState = (agentData.nodes || {})['write'] || {};
+
+      let articleList = '';
+      writeTasks.forEach((task, idx) => {
+        const isDone = task.status === 'completed';
+        const isFailed = task.status === 'failed';
+        const borderColor = isDone ? '#10b981' : isFailed ? '#ef4444' : '#f59e0b';
+        const statusIcon = isDone ? '✓' : isFailed ? '✗' : '⏳';
+
+        let output = {};
+        try { if (task.output_data) output = JSON.parse(task.output_data); } catch (e) {}
+
+        articleList += `
+          <div style="padding: 8px; border-left: 3px solid ${borderColor}; margin-bottom: 8px; background: #1f2937; border-radius: 4px;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span style="color: #f3f4f6; font-size: 13px;">${escapeHtml(task.task_name || `文章${idx + 1}`)}</span>
+              <span style="color: ${borderColor}; font-size: 12px;">${statusIcon}</span>
+            </div>
+            ${output.title ? `<div style="color: #9ca3af; font-size: 11px; margin-top: 4px;">生成标题: ${escapeHtml(output.title)}</div>` : ''}
+            ${task.error_message ? `<div style="color: #ef4444; font-size: 11px; margin-top: 4px;">${escapeHtml(task.error_message)}</div>` : ''}
+          </div>`;
+      });
+
+      panel.innerHTML = `
+        <div class="detail-header" style="background: linear-gradient(135deg, #1f2937 0%, #111827 100%); border-bottom: 2px solid #374151;">
+          <h3 style="display: flex; align-items: center; gap: 8px;">
+            <span>✍️</span> 推文生成
+            <span style="color: #10b981; font-size: 14px; font-weight: 500;">[${nodeState.count || 0}篇]</span>
+          </h3>
+          <button onclick="AgentDetailPanel.close()" style="background: #374151; color: #f3f4f6; border: none; border-radius: 6px; width: 32px; height: 32px; cursor: pointer; font-size: 20px; line-height: 1;">&times;</button>
+        </div>
+        <div style="padding: 12px 16px; background: linear-gradient(135deg, #1f2937 0%, #111827 100%); border-bottom: 1px solid #374151;">
+          <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;">
+            <div style="background: #1e3a8a; padding: 10px; border-radius: 8px; text-align: center; border: 1px solid #3b82f6;">
+              <div style="color: #93c5fd; font-size: 11px; margin-bottom: 2px;">目标</div>
+              <div style="color: #fff; font-size: 22px; font-weight: 700;">${writeStage.total || 0}</div>
+            </div>
+            <div style="background: #065f46; padding: 10px; border-radius: 8px; text-align: center; border: 1px solid #10b981;">
+              <div style="color: #6ee7b7; font-size: 11px; margin-bottom: 2px;">完成</div>
+              <div style="color: #fff; font-size: 22px; font-weight: 700;">${writeStage.completed || 0}</div>
+            </div>
+            <div style="background: #991b1b; padding: 10px; border-radius: 8px; text-align: center; border: 1px solid #ef4444;">
+              <div style="color: #fca5a5; font-size: 11px; margin-bottom: 2px;">失败</div>
+              <div style="color: #fff; font-size: 22px; font-weight: 700;">${writeStage.failed || 0}</div>
+            </div>
+          </div>
+        </div>
+        <div style="padding: 8px 16px 0; overflow-y: auto; max-height: calc(100vh - 260px);">
+          <div style="margin-bottom: 8px; color: #f3f4f6; font-size: 13px; font-weight: 600;">📝 文章列表</div>
+          ${articleList || '<p style="color: #9ca3af; text-align: center; padding: 20px;">暂无数据</p>'}
         </div>`;
     }
   }

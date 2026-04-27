@@ -59,6 +59,12 @@ class WeChatPublisher:
 
     def _request_with_retry(self, method: str, url: str, **kwargs) -> Dict:
         """带重试的HTTP请求"""
+        # 将 json= 参数转为 data= 显式编码，确保中文不被转义为 \uXXXX
+        if 'json' in kwargs:
+            payload = kwargs.pop('json')
+            kwargs['data'] = json.dumps(payload, ensure_ascii=False).encode('utf-8')
+            kwargs.setdefault('headers', {})['Content-Type'] = 'application/json; charset=utf-8'
+
         last_error = None
         for attempt in range(1, self.max_retries + 1):
             try:
@@ -256,20 +262,57 @@ class WeChatPublisher:
     def _build_article_item(self, article: Dict, thumb_media_id: str = '') -> Dict:
         """构建文章数据结构"""
         title = article.get('title', '')
-        # 微信标题限制：64字节（注意是字节不是字符，中文占3字节）
-        # 按字节截断，保守使用60字节以防边界问题
-        title = self._truncate_by_bytes(title, max_bytes=60)
+        # 微信标题限制：UTF-8编码64字节（约21个汉字）
+        title = self._truncate_by_bytes(title, max_bytes=64)
+
+        digest = article.get('summary', '')
+        # 摘要限制：120字节
+        digest = self._truncate_by_bytes(digest, max_bytes=120)
+
+        # 内容格式化：纯文本转HTML（换行符转<br>，段落用<p>包裹）
+        content = article.get('content', '')
+        content = self._format_content_to_html(content)
 
         return {
             'title': title,
-            'thumb_media_id': thumb_media_id,  # 必填字段
+            'thumb_media_id': thumb_media_id,
             'author': article.get('author', 'InfoHub'),
-            'digest': self._truncate_by_bytes(article.get('summary', ''), max_bytes=120),
-            'content': article.get('content', ''),
+            'digest': digest,
+            'content': content,
             'content_source_url': article.get('source_url', ''),
             'need_open_comment': 0,
             'only_fans_can_comment': 0,
         }
+
+    @staticmethod
+    def _format_content_to_html(text: str) -> str:
+        """将纯文本格式化为HTML（保留段落和换行）"""
+        if not text:
+            return ''
+
+        # 按段落分割（连续两个换行符）
+        paragraphs = text.split('\n\n')
+
+        # 每个段落用<p>包裹，段落内的单个换行符转<br>
+        html_parts = []
+        for para in paragraphs:
+            para = para.strip()
+            if para:
+                # 段落内的单个换行符转<br>
+                para = para.replace('\n', '<br>')
+                html_parts.append(f'<p>{para}</p>')
+
+        return ''.join(html_parts)
+
+    @staticmethod
+    def _truncate_by_bytes(text: str, max_bytes: int) -> str:
+        """按UTF-8字节数截断字符串，不切断多字节字符"""
+        encoded = text.encode('utf-8')
+        if len(encoded) <= max_bytes:
+            return text
+        # 从后往前找安全截断点
+        truncated = encoded[:max_bytes]
+        return truncated.decode('utf-8', errors='ignore')
 
     @staticmethod
     def _truncate_by_bytes(text: str, max_bytes: int) -> str:
@@ -309,8 +352,10 @@ class WeChatPublisher:
 
         payload = {'articles': article_items}
 
-        # 调试：打印payload
-        logger.info(f"创建草稿payload: {json.dumps(payload, ensure_ascii=False)[:500]}")
+        # 调试：打印所有文章标题和长度
+        for i, item in enumerate(article_items):
+            t = item.get('title', '')
+            logger.info(f"草稿文章[{i}] title({len(t)}字): {t}")
 
         data = self._request_with_retry('POST', url, json=payload)
 

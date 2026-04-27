@@ -393,7 +393,10 @@ function renderCollectionArticles() {
         return;
     }
 
-    const html = collectionArticles.map((article, index) => `
+    const html = collectionArticles.map((article, index) => {
+        const utf8Bytes = encodeURIComponent(article.title || '').replace(/%[A-F\d]{2}/g, 'x').length;
+        const isOver = utf8Bytes > 64;
+        return `
         <div class="collection-article-item"
              draggable="true"
              data-index="${index}"
@@ -404,10 +407,19 @@ function renderCollectionArticles() {
              ondragend="creationPage.handleDragEnd(event)">
             <span class="drag-handle">⋮⋮</span>
             <span class="article-order">${index + 1}</span>
-            <span class="article-title-text">${escapeHtml(article.title || '未命名')}</span>
+            <div class="article-title-edit-wrap">
+                <input type="text"
+                       class="article-title-edit ${isOver ? 'title-too-long' : ''}"
+                       value="${escapeHtml(article.title || '未命名')}"
+                       maxlength="21"
+                       placeholder="标题（最多21个汉字）"
+                       oninput="creationPage.onArticleTitleChange(${index}, this)"
+                       onclick="event.stopPropagation()">
+                <span class="title-byte-hint ${isOver ? 'over' : ''}" id="title-hint-${index}">UTF-8 ${utf8Bytes}/64字节</span>
+            </div>
             <button class="article-remove" onclick="creationPage.removeArticleFromCollection(${index})">×</button>
         </div>
-    `).join('');
+    `}).join('');
 
     container.innerHTML = html;
 }
@@ -417,6 +429,21 @@ function handleDragStart(e, index) {
     draggedItem = index;
     e.currentTarget.classList.add('dragging');
     e.dataTransfer.effectAllowed = 'move';
+}
+
+function onArticleTitleChange(index, input) {
+    const newTitle = input.value.trim();
+    if (collectionArticles[index]) {
+        collectionArticles[index].title = newTitle;
+    }
+    // 实时更新字节数提示
+    const utf8Bytes = new Blob([newTitle]).size;
+    const hint = document.getElementById(`title-hint-${index}`);
+    if (hint) {
+        hint.textContent = `UTF-8 ${utf8Bytes}/64字节`;
+        hint.classList.toggle('over', utf8Bytes > 64);
+        input.classList.toggle('title-too-long', utf8Bytes > 64);
+    }
 }
 
 function handleDragOver(e) {
@@ -578,7 +605,18 @@ async function editCollection(collectionId) {
         const result = await response.json();
 
         if (result.success) {
-            openCollectionModal(result.data);
+            const collection = result.data;
+
+            // 切换到编辑器视图
+            currentCollection = collection;
+            currentView = 'collection-editor';
+
+            // 隐藏侧边栏列表，显示编辑器
+            document.querySelector('.creation-sidebar').style.display = 'none';
+            document.querySelector('.creation-main').style.width = '100%';
+
+            // 渲染合集编辑器界面
+            renderCollectionEditorView(collection);
         } else {
             alert('加载合集失败');
         }
@@ -586,6 +624,205 @@ async function editCollection(collectionId) {
         console.error('加载合集失败:', error);
         alert('加载合集失败');
     }
+}
+
+function renderCollectionEditorView(collection) {
+    const mainArea = document.querySelector('.creation-main');
+
+    mainArea.innerHTML = `
+        <div class="collection-editor-header">
+            <button class="btn" onclick="creationPage.exitCollectionEditor()">
+                ← 返回合集列表
+            </button>
+            <h2>编辑合集：${escapeHtml(collection.title)}</h2>
+            <div class="header-actions">
+                <button class="btn btn-success" onclick="creationPage.saveCollectionContent()">保存</button>
+                <button class="btn btn-primary" onclick="creationPage.publishCollection(${collection.id})">发布到微信</button>
+            </div>
+        </div>
+
+        <div class="collection-editor-body">
+            <!-- 左侧：文章列表 -->
+            <div class="collection-articles-panel">
+                <h3>合集文章 (${collection.articles?.length || 0}篇)</h3>
+                <div id="collection-editor-articles" class="collection-editor-articles-list">
+                    ${renderCollectionArticlesList(collection.articles || [])}
+                </div>
+                <button class="btn btn-sm" onclick="creationPage.openArticleSelector()">+ 添加文章</button>
+            </div>
+
+            <!-- 右侧：富文本编辑器 -->
+            <div class="collection-content-panel">
+                <div class="collection-meta-editor">
+                    <div class="form-group">
+                        <label>合集标题</label>
+                        <input type="text" id="collection-editor-title" class="form-control"
+                               value="${escapeHtml(collection.title)}" placeholder="请输入合集标题">
+                    </div>
+
+                    <div class="form-group">
+                        <label>合集描述</label>
+                        <textarea id="collection-editor-desc" class="form-control" rows="2"
+                                  placeholder="请输入合集描述">${escapeHtml(collection.description || '')}</textarea>
+                    </div>
+
+                    <div class="form-group">
+                        <label>封面图片</label>
+                        <div class="cover-upload-area">
+                            <input type="file" id="collection-cover-upload" accept="image/*"
+                                   style="display:none" onchange="creationPage.handleCoverUpload(event)">
+                            <div class="cover-preview" id="collection-cover-preview">
+                                ${collection.cover_image ?
+                                    `<img src="${collection.cover_image}" alt="封面">` :
+                                    '<div class="cover-placeholder">点击上传封面图片</div>'}
+                            </div>
+                            <button class="btn btn-sm" onclick="document.getElementById('collection-cover-upload').click()">
+                                上传封面
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="collection-content-editor">
+                    <div class="editor-toolbar-wrapper">
+                        <div id="collection-wechat-toolbar"></div>
+                        <button class="btn btn-sm btn-ai" onclick="creationPage.openAIAssistant()">
+                            ✨ AI辅助写作
+                        </button>
+                    </div>
+                    <div id="collection-wechat-editor" style="height: 600px; overflow-y: auto;"></div>
+                </div>
+            </div>
+        </div>
+    `;
+
+    // 初始化富文本编辑器
+    setTimeout(() => {
+        if (window.wechatEditor) {
+            window.wechatEditor.destroy?.();
+            window.wechatEditor.init('#collection-wechat-editor', '#collection-wechat-toolbar');
+
+            // 加载合集内容
+            if (collection.content) {
+                window.wechatEditor.setHtml(collection.content);
+            }
+        }
+    }, 100);
+}
+
+function renderCollectionArticlesList(articles) {
+    if (!articles || articles.length === 0) {
+        return '<div class="empty-state">暂无文章</div>';
+    }
+
+    return articles.map((article, index) => `
+        <div class="collection-article-card" data-id="${article.id}">
+            <div class="article-order-badge">${index + 1}</div>
+            <div class="article-info">
+                <div class="article-title-small">${escapeHtml(article.title || '未命名')}</div>
+                <div class="article-meta-small">${article.created_at || ''}</div>
+            </div>
+            <div class="article-actions-small">
+                <button class="btn-icon" onclick="creationPage.previewArticle(${article.id})" title="预览">
+                    👁
+                </button>
+                <button class="btn-icon" onclick="creationPage.removeArticleFromCollectionEditor(${index})" title="移除">
+                    ×
+                </button>
+            </div>
+        </div>
+    `).join('');
+}
+
+function exitCollectionEditor() {
+    // 恢复侧边栏和主区域布局
+    document.querySelector('.creation-sidebar').style.display = '';
+    document.querySelector('.creation-main').style.width = '';
+
+    // 切换回合集列表视图
+    currentView = 'collections';
+    currentCollection = null;
+
+    // 重新渲染原始界面
+    render();
+    init();
+    switchView('collections');
+}
+
+async function saveCollectionContent() {
+    if (!currentCollection) return;
+
+    const title = document.getElementById('collection-editor-title')?.value.trim();
+    const description = document.getElementById('collection-editor-desc')?.value.trim();
+    const content = window.wechatEditor?.getHtml() || '';
+
+    if (!title) {
+        alert('请输入合集标题');
+        return;
+    }
+
+    try {
+        const response = await fetch(`/api/collections/${currentCollection.id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                title,
+                description,
+                content,
+                cover_image: currentCollection.cover_image || '',
+                articles: collectionArticles.map(a => a.id)
+            })
+        });
+
+        const result = await response.json();
+        if (result.success) {
+            showToast('保存成功', 'success');
+            currentCollection = result.data;
+        } else {
+            alert('保存失败: ' + (result.error || '未知错误'));
+        }
+    } catch (error) {
+        console.error('保存失败:', error);
+        alert('保存失败');
+    }
+}
+
+async function handleCoverUpload(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+        alert('请选择图片文件');
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append('image', file);
+
+    try {
+        const response = await fetch('/api/upload/wechat-image', {
+            method: 'POST',
+            body: formData
+        });
+
+        const result = await response.json();
+        if (result.success && result.url) {
+            currentCollection.cover_image = result.url;
+            document.getElementById('collection-cover-preview').innerHTML =
+                `<img src="${result.url}" alt="封面">`;
+            showToast('封面上传成功', 'success');
+        } else {
+            alert('上传失败: ' + (result.error || '未知错误'));
+        }
+    } catch (error) {
+        console.error('上传失败:', error);
+        alert('上传失败');
+    }
+}
+
+function openAIAssistant() {
+    // TODO: 实现AI辅助写作功能
+    alert('AI辅助写作功能开发中...');
 }
 
 async function deleteCollection(collectionId) {
@@ -969,6 +1206,7 @@ window.creationPage = {
     handleDragLeave,
     handleDrop,
     handleDragEnd,
+    onArticleTitleChange,
     generateFromHotspot,
     selectHotspot,
     closeHotspotModal,

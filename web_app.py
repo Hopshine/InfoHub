@@ -1240,11 +1240,12 @@ async def scan_platform_async(platform, llm_logger):
     if items:
         for item in items:
             try:
+                # 无论是否已存在，都补齐平台字段，供后续阶段使用
+                item['platform'] = platform
+
                 # 检查是否已存在（根据平台+标题）
                 existing = db.get_trending_by_title(platform, item.get('title', ''))
                 if not existing:
-                    # 添加平台字段
-                    item['platform'] = platform
                     db.save_trending_item(item)
                     saved_count += 1
             except Exception as e:
@@ -1518,10 +1519,8 @@ async def check_article_async(article, llm_logger):
     return final_score
 
 
-async def collect_and_evaluate_topic_async(topic, batch_id, llm_logger, task_id):
+async def collect_and_evaluate_topic_async(topic, batch_id, llm_logger, task_id, evaluator):
     """采集内容后立即用LLM进行评估（含内容的多维度评估）"""
-    from agent.topic_evaluator import TopicEvaluator
-
     trending_id = topic.get('id')
 
     # 1. 先查评估缓存 — 命中则跳过采集和评估
@@ -1564,8 +1563,7 @@ async def collect_and_evaluate_topic_async(topic, batch_id, llm_logger, task_id)
         logger.warning(f"采集内容失败: {topic.get('title', '')[:30]} - {e}")
         topic['_content'] = ''
 
-    # 3. LLM评估（包含内容摘要）
-    evaluator = TopicEvaluator(db)
+    # 3. LLM评估（包含内容摘要）- 复用传入的evaluator实例
     result = await asyncio.to_thread(evaluator.evaluate, topic, llm_logger)
 
     selected = result.get('selected', False)
@@ -1684,41 +1682,172 @@ async def run_agent_pipeline_async(batch_id):
                 return 0
         unique_trending.sort(key=get_hot_value, reverse=True)
         trending = unique_trending
+        # 给扫描结果补齐数据库ID（用于评估缓存命中与持久化）
+        with_id = 0
+        for item in trending:
+            try:
+                platform = item.get('platform', '')
+                title = item.get('title', '')
+                if platform and title:
+                    row = await asyncio.to_thread(db.get_trending_by_title, platform, title)
+                    if row and row.get('id'):
+                        item['id'] = row['id']
+                        with_id += 1
+            except Exception:
+                pass
+
         _set_node('scan', 'completed', len(trending))
-        logger.info(f"扫描完成: {len(trending)}条热点")
+        logger.info(f"扫描完成: {len(trending)}条热点，已绑定ID: {with_id}")
 
         # ===== Stage 2: 采集+评估 (并行) =====
         _set_node('collect', 'running')
         _update_stage('collect', 'running', total=len(trending))
 
-        collect_eval_tasks = []
-        for i, topic in enumerate(trending):
-            tid = f"collect_eval_{i}"
-            _register_task(tid, 'collect', topic.get('title', '')[:30])
-            _update_task(tid, 'running')
-            await asyncio.to_thread(db.create_agent_task, {
-                'task_key': tid, 'stage': 'collect', 'task_type': 'collect_evaluate',
-                'task_name': topic.get('title', '')[:60], 'status': 'running',
-                'input_data': json.dumps({'title': topic.get('title', ''), 'platform': topic.get('platform', '')}, ensure_ascii=False),
-                'batch_id': batch_id
-            })
-            llm_log = LLMLogger(tid, batch_id)
-            collect_eval_tasks.append({
-                'fn': collect_and_evaluate_topic_async,
-                'args': (topic, batch_id, llm_log, tid),
-                'id': tid, '_logger': llm_log
-            })
+        # 优化：使用批量评估器，跳过内容采集（内容采集太慢）
+        USE_BATCH_EVAL = True  # 开关：是否使用批量评估
+        SKIP_CONTENT_COLLECT = True  # 开关：是否跳过内容采集
 
-        collect_eval_executor = ParallelExecutor(max_concurrency=10)
-        collect_eval_results = await collect_eval_executor.run(collect_eval_tasks)
+        if USE_BATCH_EVAL:
+            # 批量评估模式：10个话题一批（受 Ollama 默认输出限制约束）
+            from agent.topic_evaluator_batch import BatchTopicEvaluator
+            batch_evaluator = BatchTopicEvaluator(db)
 
-        evaluated_topics = []
-        collect_completed = 0
-        for r in collect_eval_results:
-            _update_task(r['id'], 'completed' if not r['error'] else 'failed', r.get('error'))
-            if r['result'] is not None:
-                evaluated_topics.append(r['result'])
-                collect_completed += 1
+            evaluated_topics = []
+            batch_size = 50  # Ollama 默认 num_predict 约 2048，10个话题输出约 3000 tokens，需要调整
+
+            # 先查缓存：命中就直接复用，避免重复评估
+            topics_to_eval = []
+            cache_hits = 0
+            for topic in trending:
+                trending_id = topic.get('id')
+                if trending_id:
+                    cached = await asyncio.to_thread(db.get_trending_evaluation, trending_id)
+                    if cached and cached.get('eval_result'):
+                        result = cached['eval_result']
+                        topic['_eval_score'] = result.get('total_score', 0)
+                        topic['_eval_grade'] = result.get('grade', 'C')
+                        topic['_eval_result'] = result
+                        cache_hits += 1
+                        if result.get('selected'):
+                            evaluated_topics.append(topic)
+                        continue
+                topics_to_eval.append(topic)
+
+            logger.info(f"评估缓存命中: {cache_hits}，待新评估: {len(topics_to_eval)}")
+
+            # 仅对未命中的话题做批量评估
+            batch_count = 0
+            for batch_start in range(0, len(topics_to_eval), batch_size):
+                batch_topics = topics_to_eval[batch_start:batch_start + batch_size]
+                batch_count += 1
+
+                # 为每批创建一个虚拟任务，让前端能看到进度
+                batch_task_id = f"batch_eval_{batch_count}"
+                _register_task(batch_task_id, 'collect', f'批量评估 {batch_count}/{(len(topics_to_eval) + batch_size - 1) // batch_size}')
+                _update_task(batch_task_id, 'running')
+                await asyncio.to_thread(db.create_agent_task, {
+                    'task_key': batch_task_id,
+                    'stage': 'collect',
+                    'task_type': 'batch_evaluate',
+                    'task_name': f'批量评估第{batch_count}批（{len(batch_topics)}个话题）',
+                    'status': 'running',
+                    'batch_id': batch_id
+                })
+
+                try:
+                    batch_results = batch_evaluator.evaluate_batch(batch_topics, batch_size=len(batch_topics))
+
+                    # 为每个话题创建单独的任务记录（供前端详情面板显示）
+                    for topic, result in zip(batch_topics, batch_results):
+                        topic['_eval_score'] = result.get('total_score', 0)
+                        topic['_eval_grade'] = result.get('grade', 'C')
+                        topic['_eval_result'] = result
+
+                        # 创建单个话题的任务记录
+                        topic_task_id = f"collect_eval_{topic.get('id', uuid.uuid4().hex[:8])}"
+                        _register_task(topic_task_id, 'collect', topic.get('title', '')[:30])
+                        selected = result.get('selected', False)
+                        _update_task(topic_task_id, 'completed' if selected else 'failed')
+                        await asyncio.to_thread(db.create_agent_task, {
+                            'task_key': topic_task_id,
+                            'stage': 'collect',
+                            'task_type': 'evaluate',
+                            'task_name': topic.get('title', '')[:60],
+                            'status': 'completed' if selected else 'failed',
+                            'output_data': json.dumps(result, ensure_ascii=False),
+                            'completed_at': datetime.now().isoformat(),
+                            'batch_id': batch_id
+                        })
+
+                        # 评估后立即持久化（通过/拒绝都保存）
+                        if topic.get('id'):
+                            await asyncio.to_thread(
+                                db.save_trending_evaluation,
+                                topic['id'],
+                                result,
+                                batch_evaluator.config.get('model', 'unknown')
+                            )
+
+                        if result.get('selected'):
+                            evaluated_topics.append(topic)
+
+                    # 批次完成，更新任务状态
+                    _update_task(batch_task_id, 'completed')
+                    await asyncio.to_thread(db.update_agent_task, batch_task_id, {
+                        'status': 'completed',
+                        'output_data': json.dumps({
+                            'batch': batch_count,
+                            'total': len(batch_topics),
+                            'passed': sum(1 for r in batch_results if r.get('selected'))
+                        }, ensure_ascii=False),
+                        'completed_at': datetime.now().isoformat()
+                    })
+
+                except Exception as e:
+                    logger.error(f"批量评估失败: {e}")
+                    _update_task(batch_task_id, 'failed', str(e))
+                    await asyncio.to_thread(db.update_agent_task, batch_task_id, {
+                        'status': 'failed',
+                        'error_message': str(e),
+                        'completed_at': datetime.now().isoformat()
+                    })
+
+            collect_completed = len(evaluated_topics)
+            logger.info(f"批量评估完成: {collect_completed}/{len(trending)} 通过")
+
+        else:
+            # 原逐个评估模式（降级方案）- 只初始化一次 evaluator
+            from agent.topic_evaluator import TopicEvaluator
+            shared_evaluator = TopicEvaluator(db)  # 单例，所有任务共享
+
+            collect_eval_tasks = []
+            for i, topic in enumerate(trending):
+                tid = f"collect_eval_{i}"
+                _register_task(tid, 'collect', topic.get('title', '')[:30])
+                _update_task(tid, 'running')
+                await asyncio.to_thread(db.create_agent_task, {
+                    'task_key': tid, 'stage': 'collect', 'task_type': 'collect_evaluate',
+                    'task_name': topic.get('title', '')[:60], 'status': 'running',
+                    'input_data': json.dumps({'title': topic.get('title', ''), 'platform': topic.get('platform', '')}, ensure_ascii=False),
+                    'batch_id': batch_id
+                })
+                llm_log = LLMLogger(tid, batch_id)
+                collect_eval_tasks.append({
+                    'fn': collect_and_evaluate_topic_async,
+                    'args': (topic, batch_id, llm_log, tid, shared_evaluator),
+                    'id': tid, '_logger': llm_log
+                })
+
+            collect_eval_executor = ParallelExecutor(max_concurrency=30)  # 提高并发度
+            collect_eval_results = await collect_eval_executor.run(collect_eval_tasks)
+
+            evaluated_topics = []
+            collect_completed = 0
+            for r in collect_eval_results:
+                _update_task(r['id'], 'completed' if not r['error'] else 'failed', r.get('error'))
+                if r['result'] is not None:
+                    evaluated_topics.append(r['result'])
+                    collect_completed += 1
 
         _update_stage('collect', 'completed', total=len(trending), completed=collect_completed)
         _set_node('collect', 'completed', len(trending))
@@ -1987,10 +2116,15 @@ def agent_status_detailed():
         except Exception as e:
             logger.error(f"读取数据库tasks失败: {e}")
 
-    # 补充内存中还没写入数据库的task
+    # 补充内存中还没写入数据库的task（以数据库为准，不覆盖数据库任务）
     for task_id, mem_task in agent_state.get('tasks', {}).items():
         if task_id not in tasks_data:
             tasks_data[task_id] = mem_task
+        else:
+            # 补齐数据库里缺失字段
+            for k, v in mem_task.items():
+                if k not in tasks_data[task_id] or tasks_data[task_id][k] in (None, '', 0):
+                    tasks_data[task_id][k] = v
 
     return jsonify({'success': True, 'data': {
         'running': agent_state['running'],

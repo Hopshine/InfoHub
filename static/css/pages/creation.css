@@ -674,6 +674,45 @@
     white-space: nowrap;
 }
 
+.article-title-edit-wrap {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.article-title-edit {
+    width: 100%;
+    padding: 6px 10px;
+    border: 1px solid #e2e8f0;
+    border-radius: 4px;
+    font-size: 14px;
+    color: #2d3748;
+    transition: all 0.2s;
+}
+
+.article-title-edit:focus {
+    outline: none;
+    border-color: #38a169;
+    box-shadow: 0 0 0 3px rgba(56, 161, 105, 0.1);
+}
+
+.article-title-edit.title-too-long {
+    border-color: #e53e3e;
+    background: #fff5f5;
+}
+
+.title-byte-hint {
+    font-size: 11px;
+    color: #a0aec0;
+    text-align: right;
+}
+
+.title-byte-hint.over {
+    color: #e53e3e;
+    font-weight: 600;
+}
+
 .article-remove {
     background: none;
     border: none;
