@@ -1,6 +1,6 @@
 /**
  * Agent DAG 可视化核心
- * 水平分层布局：scan -> evaluate -> [workflows by stage] -> compose
+ * 线性流水线：scan -> collect -> analyze -> select -> write
  */
 const AgentDAGVisualizer = (() => {
 
@@ -10,26 +10,28 @@ const AgentDAGVisualizer = (() => {
   const NODE_GAP = 100;
   const PAD = 50;
 
-  const STAGE_ORDER = ['collecting', 'analyzing', 'writing', 'checking', 'completed'];
+  const PIPELINE_NODES = [
+    { id: 'scan',    label: '热点扫描', icon: '📡' },
+    { id: 'collect', label: '采集评估', icon: '📥' },
+    { id: 'analyze', label: '分析评估', icon: '🧠' },
+    { id: 'select',  label: '精选话题', icon: '🎯' },
+    { id: 'write',   label: '推文生成', icon: '✍️' },
+  ];
 
   const COLORS = {
-    scan:       '#10b981',
-    evaluate:   '#3b82f6',
-    collecting: '#f59e0b',
-    analyzing:  '#8b5cf6',
-    writing:    '#ec4899',
-    checking:   '#06b6d4',
-    completed:  '#10b981',
-    failed:     '#ef4444',
-    compose:    '#6366f1',
-    workflow:   '#6b7280'
+    scan:    '#10b981',
+    collect: '#3b82f6',
+    analyze: '#8b5cf6',
+    select:  '#f59e0b',
+    write:   '#ec4899',
+    pending: '#4b5563',
+    failed:  '#ef4444',
   };
 
   let containerInitialized = false;
   let lastRenderTime = 0;
   const MIN_RENDER_INTERVAL = 2000;
 
-  // 视口变换状态
   let viewportTransform = { x: 0, y: 0, scale: 1 };
   let isDragging = false;
   let dragStart = { x: 0, y: 0 };
@@ -39,7 +41,6 @@ const AgentDAGVisualizer = (() => {
     if (containerInitialized) return;
     containerInitialized = true;
 
-    // 添加控制按钮
     const controls = document.createElement('div');
     controls.className = 'dag-controls';
     controls.innerHTML = `
@@ -50,7 +51,6 @@ const AgentDAGVisualizer = (() => {
     `;
     container.appendChild(controls);
 
-    // 绑定控制按钮事件
     document.getElementById('dag-zoom-in').addEventListener('click', () => zoomBy(1.2));
     document.getElementById('dag-zoom-out').addEventListener('click', () => zoomBy(0.8));
     document.getElementById('dag-reset').addEventListener('click', resetView);
@@ -59,88 +59,39 @@ const AgentDAGVisualizer = (() => {
 
   function render(container, statusData) {
     if (!container) return;
-
-    // 初始化容器
     initContainer(container);
 
-    // 限制渲染频率，避免闪烁（改为10秒）
     const now = Date.now();
-    if (now - lastRenderTime < MIN_RENDER_INTERVAL) {
-      console.log('[DAG] Skip render: too soon');
-      return;
-    }
+    if (now - lastRenderTime < MIN_RENDER_INTERVAL) return;
     lastRenderTime = now;
 
-    const workflows = statusData.workflows || [];
-    const compose = statusData.compose || {};
-
-    const graph = buildGraph(workflows, compose, statusData);
+    const graph = buildGraph(statusData);
     computeHorizontalLayout(graph);
     renderSVG(container, graph);
   }
 
-  function getStageIndex(stage) {
-    const idx = STAGE_ORDER.indexOf(stage);
-    return idx >= 0 ? idx : 0;
-  }
-
-  function buildGraph(workflows, compose, statusData) {
+  function buildGraph(statusData) {
     const nodes = [];
     const edges = [];
+    const nodeStates = statusData.nodes || {};
 
-    // Layer 0: scan节点
-    nodes.push({ id: 'scan', type: 'scan', layer: 0, row: 0, data: statusData });
-
-    // Layer 1: evaluate节点
-    nodes.push({ id: 'evaluate', type: 'evaluate', layer: 1, row: 0, data: statusData });
-    edges.push({ from: 'scan', to: 'evaluate' });
-
-    // Layer 2-6: 每个workflow的各个阶段节点
-    workflows.forEach((wf, wfIdx) => {
-      const wfId = wf.id || `wf-${wfIdx}`;
-      const stages = ['collecting', 'analyzing', 'writing', 'checking', 'completed'];
-
-      // 找到当前workflow到达的最远stage
-      const currentStageIdx = stages.indexOf(wf.current_stage);
-      const maxStageIdx = currentStageIdx >= 0 ? currentStageIdx : 0;
-
-      // 为每个已经过的stage创建节点
-      for (let stageIdx = 0; stageIdx <= maxStageIdx; stageIdx++) {
-        const stage = stages[stageIdx];
-        const nodeId = `${wfId}-${stage}`;
-        const isCurrentStage = stageIdx === maxStageIdx;
-
-        nodes.push({
-          id: nodeId,
-          type: 'workflow',
-          layer: 2 + stageIdx,
-          row: wfIdx,
-          data: {
-            ...wf,
-            current_stage: stage,
-            status: isCurrentStage ? wf.status : 'completed'
-          }
-        });
-
-        // 连接到前一个节点
-        if (stageIdx === 0) {
-          edges.push({ from: 'evaluate', to: nodeId });
-        } else {
-          const prevNodeId = `${wfId}-${stages[stageIdx - 1]}`;
-          edges.push({ from: prevNodeId, to: nodeId });
-        }
-      }
-
-      // 如果workflow已完成，连接到compose
-      if (wf.status === 'completed') {
-        const lastNodeId = `${wfId}-completed`;
-        edges.push({ from: lastNodeId, to: 'compose' });
+    PIPELINE_NODES.forEach((def, i) => {
+      const nodeState = nodeStates[def.id] || {};
+      nodes.push({
+        id: def.id,
+        type: def.id,
+        layer: i,
+        row: 0,
+        label: def.label,
+        icon: def.icon,
+        status: nodeState.status || 'pending',
+        count: nodeState.count || 0,
+        data: statusData,
+      });
+      if (i > 0) {
+        edges.push({ from: PIPELINE_NODES[i - 1].id, to: def.id });
       }
     });
-
-    // 最后一层: compose节点
-    const composeLayer = 2 + 5; // 2 + stages.length
-    nodes.push({ id: 'compose', type: 'compose', layer: composeLayer, row: 0, data: compose });
 
     return { nodes, edges };
   }
@@ -176,8 +127,8 @@ const AgentDAGVisualizer = (() => {
       id: n.id,
       px: n.px,
       py: n.py,
-      stage: n.data?.current_stage,
-      status: n.data?.status
+      status: n.status,
+      count: n.count,
     })));
 
     if (dataFingerprint === lastRenderData) {
@@ -378,7 +329,7 @@ const AgentDAGVisualizer = (() => {
   function createNodeElement(node) {
     const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
     g.setAttribute('transform', `translate(${node.px}, ${node.py})`);
-    g.setAttribute('class', node.data?.status === 'running' ? 'dag-node dag-node-active' : 'dag-node');
+    g.setAttribute('class', node.status === 'running' ? 'dag-node dag-node-active' : 'dag-node');
     g.setAttribute('data-id', node.id);
     g.setAttribute('data-type', node.type);
     g.style.cursor = 'pointer';
@@ -432,7 +383,7 @@ const AgentDAGVisualizer = (() => {
 
   function updateNodeElement(g, node) {
     g.setAttribute('transform', `translate(${node.px}, ${node.py})`);
-    g.setAttribute('class', node.data?.status === 'running' ? 'dag-node dag-node-active' : 'dag-node');
+    g.setAttribute('class', node.status === 'running' ? 'dag-node dag-node-active' : 'dag-node');
 
     const color = getNodeColor(node);
     const label = getNodeLabel(node);
@@ -471,165 +422,39 @@ const AgentDAGVisualizer = (() => {
 
   function buildTooltipText(node) {
     const lines = [];
-    if (node.type === 'workflow') {
-      const d = node.data || {};
-      if (d.topic_title) lines.push(d.topic_title);
-      lines.push(`平台: ${d.platform || '-'}`);
-      lines.push(`阶段: ${d.current_stage || '-'}`);
-      lines.push(`状态: ${d.status || '-'}`);
-      if (d.retry_count > 0) lines.push(`重试: ${d.retry_count}次`);
-      if (d.quality_score) lines.push(`评分: ${Math.round(d.quality_score * 100)}分`);
-    } else if (node.type === 'scan') {
-      lines.push('热点扫描');
-    } else if (node.type === 'evaluate') {
-      lines.push('价值评估');
-    } else if (node.type === 'compose') {
-      lines.push('汇总输出');
-    }
+    const nodeState = node.data?.nodes?.[node.type] || {};
+    lines.push(node.label || node.type);
+    if (nodeState.count) lines.push(`${nodeState.count}条`);
+    lines.push(`状态: ${node.status || 'pending'}`);
     return lines.join('\n');
   }
 
   function getNodeColor(node) {
-    if (node.type === 'workflow') {
-      if (node.data?.status === 'failed') return COLORS.failed;
-      if (node.data?.status === 'completed') return COLORS.completed;
-      return COLORS[node.data?.current_stage] || COLORS.workflow;
-    }
-    return COLORS[node.type] || COLORS.workflow;
+    if (node.status === 'failed') return COLORS.failed;
+    return COLORS[node.type] || COLORS.pending;
   }
 
   function getNodeLabel(node) {
-    if (node.type === 'scan') return '热点扫描';
-    if (node.type === 'evaluate') return '价值评估';
-    if (node.type === 'compose') return '汇总输出';
-    const title = node.data?.topic_title || node.data?.title || node.id;
-    return truncateLabel(String(title), 7);
+    return node.label || node.type;
   }
 
   function getNodeSubLabel(node) {
-    if (node.type === 'workflow') {
-      const stage = node.data?.current_stage || '';
-      const status = node.data?.status || '';
-
-      // 阶段中文映射
-      const stageMap = {
-        'collecting': '采集',
-        'analyzing': '分析',
-        'writing': '生成',
-        'checking': '检查',
-        'completed': '完成'
-      };
-
-      // 状态后缀映射
-      const statusSuffix = {
-        'running': '中',
-        'completed': '完成',
-        'failed': '失败',
-        'waiting': '等待',
-        'blocked': '阻塞'
-      };
-
-      const stageCN = stageMap[stage] || stage;
-      const suffix = statusSuffix[status] || '';
-
-      return escapeHtml(stageCN + suffix);
-    }
-    if (node.type === 'scan' && node.data?.count != null) return `${node.data.count}条`;
-    if (node.type === 'evaluate' && node.data?.count != null) return `${node.data.count}条`;
-    if (node.type === 'compose') return escapeHtml(node.data?.status || '');
-    return '';
-  }
-
-  function renderNode(node) {
-    const color = getNodeColor(node);
-    const label = getNodeLabel(node);
-    const subLabel = getNodeSubLabel(node);
-    const isActive = node.data?.status === 'running';
-    const nodeClass = isActive ? 'dag-node dag-node-active' : 'dag-node';
-
-    // 构建tooltip内容
-    let tooltipLines = [];
-    if (node.type === 'workflow') {
-      const d = node.data || {};
-      tooltipLines.push(d.topic_title || '');
-      tooltipLines.push(`平台: ${d.platform || '-'}`);
-      tooltipLines.push(`阶段: ${d.current_stage || '-'}`);
-      tooltipLines.push(`状态: ${d.status || '-'}`);
-      if (d.retry_count > 0) tooltipLines.push(`重试: ${d.retry_count}次`);
-      if (d.quality_score) tooltipLines.push(`评分: ${Math.round(d.quality_score * 100)}分`);
-    } else if (node.type === 'scan') {
-      tooltipLines.push('热点扫描');
-      if (node.data?.count) tooltipLines.push(`扫描到 ${node.data.count} 条热点`);
-    } else if (node.type === 'evaluate') {
-      tooltipLines.push('价值评估');
-      if (node.data?.count) tooltipLines.push(`筛选出 ${node.data.count} 个话题`);
-    } else if (node.type === 'compose') {
-      tooltipLines.push('汇总输出');
-      tooltipLines.push(`状态: ${node.data?.status || 'pending'}`);
-    }
-    const tooltipText = tooltipLines.join('&#10;');
-
-    return `
-      <g transform="translate(${node.px}, ${node.py})"
-         class="${nodeClass}"
-         data-id="${escapeAttr(node.id)}"
-         data-type="${node.type}"
-         style="cursor:pointer;"
-         onclick="AgentDAGVisualizer.showDetail('${escapeAttr(node.id)}')"
-         onmouseenter="AgentDAGVisualizer.showTooltip(evt, '${escapeAttr(node.id)}')"
-         onmouseleave="AgentDAGVisualizer.hideTooltip()">
-        <rect width="${NODE_W}" height="${NODE_H}" rx="8"
-              fill="${color}" fill-opacity="0.15"
-              stroke="${color}" stroke-width="2"/>
-        <text x="${NODE_W / 2}" y="${NODE_H / 2 - 2}" text-anchor="middle"
-              fill="#e5e7eb" font-size="12" font-weight="500">${label}</text>
-        ${subLabel ? `<text x="${NODE_W / 2}" y="${NODE_H / 2 + 16}" text-anchor="middle"
-              fill="#9ca3af" font-size="10">${subLabel}</text>` : ''}
-        <title>${tooltipText}</title>
-      </g>
-    `;
-  }
-
-  function renderEdge(edge, nodes) {
-    const from = nodes.find(n => n.id === edge.from);
-    const to = nodes.find(n => n.id === edge.to);
-    if (!from || !to) return '';
-
-    const x1 = from.px + NODE_W;
-    const y1 = from.py + NODE_H / 2;
-    const x2 = to.px;
-    const y2 = to.py + NODE_H / 2;
-
-    const dx = (x2 - x1) * 0.5;
-    return `<path d="M${x1},${y1} C${x1 + dx},${y1} ${x2 - dx},${y2} ${x2},${y2}"
-                  fill="none" stroke="#4b5563" stroke-width="2"
-                  marker-end="url(#dag-arrow)"/>`;
+    const statusMap = { running: '运行中', completed: '完成', failed: '失败', pending: '' };
+    const statusText = statusMap[node.status] || '';
+    const countText = node.count > 0 ? `${node.count}条` : '';
+    if (countText && statusText) return `${statusText} · ${countText}`;
+    return statusText || countText || '';
   }
 
   function showDetail(nodeId) {
     console.log('[DAG] Node clicked:', nodeId);
-
-    // 特殊节点：scan和evaluate
-    if (nodeId === 'scan' || nodeId === 'evaluate') {
+    // 新流水线节点：scan, collect, analyze, select, write
+    if (['scan', 'collect', 'analyze', 'select', 'write'].includes(nodeId)) {
       window.dispatchEvent(new CustomEvent('dag-node-click', { detail: { nodeId: nodeId, stage: nodeId } }));
       return;
     }
-
-    // workflow节点（格式：wf_xxxxx-stage 或 wf-xxxxx-stage），提取真实的workflow ID和stage
-    let realId = nodeId;
-    let stage = null;
-
-    const lastDashIdx = nodeId.lastIndexOf('-');
-    if (lastDashIdx > 0 && (nodeId.startsWith('wf_') || nodeId.startsWith('wf-'))) {
-      const possibleStage = nodeId.substring(lastDashIdx + 1);
-      if (['collecting', 'analyzing', 'planning', 'writing', 'checking', 'completed', 'failed'].includes(possibleStage)) {
-        realId = nodeId.substring(0, lastDashIdx);
-        stage = possibleStage;
-      }
-    }
-
-    console.log('[DAG] Extracted ID:', realId, 'stage:', stage);
-    window.dispatchEvent(new CustomEvent('dag-node-click', { detail: { nodeId: realId, stage: stage } }));
+    // 其他节点（如果有）
+    window.dispatchEvent(new CustomEvent('dag-node-click', { detail: { nodeId: nodeId, stage: null } }));
   }
 
   function showTooltip() {}

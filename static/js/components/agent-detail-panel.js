@@ -85,26 +85,29 @@ const AgentDetailPanel = (() => {
       let platformResults = '';
       scanTasks.forEach(task => {
         const platform = task.task_name || task.task_key || '未知平台';
-        const status = task.status === 'completed' ? '✓' : task.status === 'failed' ? '✗' : '⏳';
+        const isDone = task.status === 'completed';
+        const isFailed = task.status === 'failed';
+        const isRunning = !isDone && !isFailed;
+        const statusIcon = isDone ? '✓' : isFailed ? '✗' : '⏳';
+        const borderColor = isDone ? '#10b981' : isFailed ? '#ef4444' : '#f59e0b';
+        const statusColor = isDone ? '#10b981' : isFailed ? '#ef4444' : '#f59e0b';
 
         let output = {};
         try {
           output = task.output_data ? JSON.parse(task.output_data) : {};
-        } catch (e) {
-          console.error('Failed to parse output_data:', e);
-        }
+        } catch (e) {}
 
         const count = output.count || 0;
         const saved = output.saved || 0;
         const platformName = output.platform || platform;
 
         platformResults += `
-          <div style="padding: 8px; border-left: 3px solid ${task.status === 'completed' ? '#10b981' : '#ef4444'}; margin-bottom: 8px; background: #1f2937;">
+          <div style="padding: 8px; border-left: 3px solid ${borderColor}; margin-bottom: 8px; background: #1f2937;">
             <div style="display: flex; justify-content: space-between; align-items: center;">
               <strong style="color: #f3f4f6;">${platformName}</strong>
-              <span style="color: #9ca3af;">${status} 采集${count}条 / 新增${saved}条</span>
+              <span style="color: ${statusColor};">${statusIcon} ${isDone ? `采集${count}条 / 新增${saved}条` : isFailed ? '失败' : '扫描中...'}</span>
             </div>
-            ${task.error ? `<div style="color: #ef4444; font-size: 12px; margin-top: 4px;">${task.error}</div>` : ''}
+            ${task.error_message || task.error ? `<div style="color: #ef4444; font-size: 12px; margin-top: 4px;">${task.error_message || task.error}</div>` : ''}
           </div>
         `;
       });
@@ -136,59 +139,34 @@ const AgentDetailPanel = (() => {
           ${renderLLMLogs(scanLogs)}
         </div>` : ''}
       `;
-    } else if (nodeType === 'evaluate') {
-      const evalStage = stages['evaluate'] || {};
-      const evalTasks = Object.values(tasks).filter(t => t.stage === 'evaluate');
-      const evalLogs = llmLogs.filter(log => log.stage === 'evaluate');
+    } else if (nodeType === 'collect') {
+      const collectStage = stages['collect'] || {};
+      const collectTasks = Object.values(tasks).filter(t => t.stage === 'collect');
+      const collectLogs = llmLogs.filter(log => log.stage === 'collect');
 
-      // 统计：通过/拒绝/待评估
-      let passCount = 0;
-      let failCount = 0;
-      let pendingCount = 0;
-
+      let passCount = 0, failCount = 0, pendingCount = 0;
       let topicList = '';
-      evalTasks.forEach((task, idx) => {
-        const title = task.task_name || '未知话题';
 
+      collectTasks.forEach((task, idx) => {
+        const title = task.task_name || '未知话题';
         let output = {};
         let hasOutput = false;
         try {
-          if (task.output_data) {
-            output = JSON.parse(task.output_data);
-            hasOutput = true;
-          }
+          if (task.output_data) { output = JSON.parse(task.output_data); hasOutput = true; }
         } catch (e) {}
 
-        let selected = false;
-        let statusText = '';
-        let statusColor = '';
-        let borderColor = '';
-
+        let selected = false, statusText = '', statusColor = '', borderColor = '';
         if (!hasOutput || task.status === 'running') {
-          // 待评估
           pendingCount++;
-          statusText = '⏳ 待评估';
-          statusColor = '#f59e0b';
-          borderColor = '#f59e0b';
+          statusText = '⏳ 处理中'; statusColor = '#f59e0b'; borderColor = '#f59e0b';
         } else {
           selected = output.selected === true;
-          if (selected) {
-            passCount++;
-            statusText = '✓ 通过';
-            statusColor = '#10b981';
-            borderColor = '#10b981';
-          } else {
-            failCount++;
-            statusText = '✗ 拒绝';
-            statusColor = '#ef4444';
-            borderColor = '#ef4444';
-          }
+          if (selected) { passCount++; statusText = '✓ 通过'; statusColor = '#10b981'; borderColor = '#10b981'; }
+          else { failCount++; statusText = '✗ 拒绝'; statusColor = '#ef4444'; borderColor = '#ef4444'; }
         }
 
-        // 解析打分详情
         let scoreDetails = '';
         if (output.scores) {
-          const scores = output.scores;
           scoreDetails = `
             <div style="margin-top: 8px; padding: 10px; background: #1f2937; border-radius: 6px; border: 1px solid #374151;">
               <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
@@ -200,44 +178,38 @@ const AgentDetailPanel = (() => {
               </div>
               ${output.summary ? `<div style="color: #d1d5db; font-size: 12px; margin-bottom: 8px; padding: 6px; background: #111827; border-radius: 4px; border-left: 3px solid #3b82f6;">${escapeHtml(output.summary)}</div>` : ''}
               <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; font-size: 11px;">
-                ${Object.entries(scores).map(([key, val]) => `
+                ${Object.entries(output.scores).map(([key, val]) => `
                   <div style="padding: 6px; background: #111827; border-radius: 4px; border-left: 2px solid #60a5fa;">
                     <div style="color: #60a5fa; font-weight: 600; margin-bottom: 2px;">${key}: ${val.score}分</div>
                     <div style="color: #9ca3af; font-size: 10px;">${val.reason}</div>
                   </div>
                 `).join('')}
               </div>
-            </div>
-          `;
-        } else if (output.reason) {
-          scoreDetails = `<div style="color: #9ca3af; font-size: 12px; margin-top: 6px; padding: 6px; background: #1f2937; border-radius: 4px;">${escapeHtml(output.reason)}</div>`;
+            </div>`;
         } else if (!hasOutput) {
-          scoreDetails = `<div style="color: #f59e0b; font-size: 12px; margin-top: 6px; padding: 6px; background: #1f2937; border-radius: 4px;">⏳ 评估中...</div>`;
+          scoreDetails = `<div style="color: #f59e0b; font-size: 12px; margin-top: 6px; padding: 6px; background: #1f2937; border-radius: 4px;">⏳ 采集评估中...</div>`;
         }
 
         topicList += `
-          <div style="padding: 10px; border-left: 3px solid ${borderColor}; margin-bottom: 8px; background: linear-gradient(135deg, #111827 0%, #1f2937 100%); border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.3);">
+          <div style="padding: 10px; border-left: 3px solid ${borderColor}; margin-bottom: 8px; background: linear-gradient(135deg, #111827 0%, #1f2937 100%); border-radius: 6px;">
             <div style="color: #f3f4f6; font-weight: 500; font-size: 13px; margin-bottom: 4px;">
               <span style="color: #9ca3af; margin-right: 6px;">${idx + 1}.</span>${escapeHtml(title)}
             </div>
             ${scoreDetails}
-          </div>
-        `;
+          </div>`;
       });
 
-      const total = evalTasks.length;
+      const total = collectTasks.length;
       const passRate = total > 0 ? Math.round((passCount / total) * 100) : 0;
 
       panel.innerHTML = `
         <div class="detail-header" style="background: linear-gradient(135deg, #1f2937 0%, #111827 100%); border-bottom: 2px solid #374151;">
           <h3 style="display: flex; align-items: center; gap: 8px;">
-            <span style="font-size: 20px;">📊</span>
-            评估筛选
+            <span style="font-size: 20px;">📥</span> 采集+评估
             <span style="color: #10b981; font-size: 14px; font-weight: 500;">[${total}个话题]</span>
           </h3>
-          <button onclick="AgentDetailPanel.close()" style="background: #374151; color: #f3f4f6; border: none; border-radius: 6px; width: 32px; height: 32px; cursor: pointer; font-size: 20px; line-height: 1; transition: all 0.2s;" onmouseover="this.style.background='#4b5563'" onmouseout="this.style.background='#374151'">&times;</button>
+          <button onclick="AgentDetailPanel.close()" style="background: #374151; color: #f3f4f6; border: none; border-radius: 6px; width: 32px; height: 32px; cursor: pointer; font-size: 20px; line-height: 1;">&times;</button>
         </div>
-
         <div style="padding: 12px 16px; background: linear-gradient(135deg, #1f2937 0%, #111827 100%); border-bottom: 1px solid #374151;">
           <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 10px;">
             <div style="background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); padding: 10px; border-radius: 8px; text-align: center; border: 1px solid #3b82f6;">
@@ -253,11 +225,10 @@ const AgentDetailPanel = (() => {
               <div style="color: #fff; font-size: 22px; font-weight: 700;">${failCount}</div>
             </div>
             <div style="background: linear-gradient(135deg, #92400e 0%, #b45309 100%); padding: 10px; border-radius: 8px; text-align: center; border: 1px solid #f59e0b;">
-              <div style="color: #fcd34d; font-size: 11px; margin-bottom: 2px;">⏳ 待评估</div>
+              <div style="color: #fcd34d; font-size: 11px; margin-bottom: 2px;">⏳ 处理中</div>
               <div style="color: #fff; font-size: 22px; font-weight: 700;">${pendingCount}</div>
             </div>
           </div>
-
           <div>
             <div style="display: flex; justify-content: space-between; margin-bottom: 4px; font-size: 11px;">
               <span style="color: #9ca3af;">通过率</span>
@@ -268,22 +239,38 @@ const AgentDetailPanel = (() => {
             </div>
           </div>
         </div>
-
         <div style="padding: 8px 16px 0;">
-          <div style="margin-bottom: 8px; color: #f3f4f6; font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 6px;">📋 话题列表</div>
+          <div style="margin-bottom: 8px; color: #f3f4f6; font-size: 13px; font-weight: 600;">📋 话题列表</div>
           <div style="overflow-y: auto; max-height: calc(100vh - 320px);">
             ${topicList || '<p style="color: #9ca3af; text-align: center; padding: 20px;">暂无数据</p>'}
           </div>
         </div>
-
-        ${evalLogs.length > 0 ? `
-        <div class="detail-section">
-          <h4 style="margin-bottom: 12px; color: #f3f4f6; font-size: 16px; display: flex; align-items: center; gap: 8px;">
-            <span>🤖</span> LLM调用日志 (${evalLogs.length}条)
-          </h4>
-          ${renderLLMLogs(evalLogs)}
-        </div>` : ''}
+        ${collectLogs.length > 0 ? `<div class="detail-section"><h4>LLM调用日志 (${collectLogs.length}条)</h4>${renderLLMLogs(collectLogs)}</div>` : ''}
       `;
+    } else if (nodeType === 'analyze') {
+      const analyzeStage = stages['analyze'] || {};
+      panel.innerHTML = `
+        <div class="detail-header">
+          <h3>🧠 分析评估</h3>
+          <button onclick="AgentDetailPanel.close()">&times;</button>
+        </div>
+        <div class="detail-section">
+          <div class="detail-item"><span>总计：</span><strong>${analyzeStage.total || 0}条</strong></div>
+          <div class="detail-item"><span>通过：</span><strong style="color:#10b981">${analyzeStage.completed || 0}条</strong></div>
+          <div class="detail-item"><span>状态：</span><strong>${analyzeStage.status || '未知'}</strong></div>
+        </div>`;
+    } else if (nodeType === 'select') {
+      const selectStage = stages['select'] || {};
+      panel.innerHTML = `
+        <div class="detail-header">
+          <h3>🎯 精选话题</h3>
+          <button onclick="AgentDetailPanel.close()">&times;</button>
+        </div>
+        <div class="detail-section">
+          <div class="detail-item"><span>候选：</span><strong>${selectStage.total || 0}条</strong></div>
+          <div class="detail-item"><span>精选：</span><strong style="color:#10b981">${selectStage.completed || 0}条</strong></div>
+          <p style="color:#9ca3af; font-size:13px; margin-top:8px;">按评估总分排序，取Top 10进入写作阶段。</p>
+        </div>`;
     }
   }
 

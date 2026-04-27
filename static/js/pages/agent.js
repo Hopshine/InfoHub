@@ -539,11 +539,29 @@ const AgentPage = (() => {
     if (modal) { modal.style.display = 'none'; modal.innerHTML = ''; }
   }
 
+  let agentConfig = null;
+
   async function openSettings() {
-    await loadPrompts();
     const modal = document.getElementById('agent-settings-modal');
     modal.style.display = '';
-    renderSettingsModal();
+    modal.innerHTML = '<div class="agent-modal-overlay"><div class="agent-modal"><div style="padding:24px;color:#9ca3af;text-align:center;">加载中...</div></div></div>';
+
+    try {
+      const [configResp, accountsResp] = await Promise.all([
+        fetch('/api/agent/config'),
+        fetch('/api/accounts')
+      ]);
+      const configData = configResp.ok ? await configResp.json() : { success: false };
+      const accountsData = accountsResp.ok ? await accountsResp.json() : { success: false };
+
+      agentConfig = configData.success ? configData.data : {};
+      const accounts = accountsData.success ? (accountsData.data || []) : [];
+
+      renderSettingsModal(accounts);
+    } catch (e) {
+      console.error('加载Agent设置失败:', e);
+      renderSettingsModal([]);
+    }
   }
 
   function closeSettings() {
@@ -561,48 +579,157 @@ const AgentPage = (() => {
     }
   }
 
-  function renderSettingsModal() {
+  function renderSettingsModal(accounts = []) {
     const modal = document.getElementById('agent-settings-modal');
+    const cfg = agentConfig || {};
+    const linked = cfg.linked_accounts || {};
+    const generation = cfg.generation || {};
+    const topics = cfg.topics || {};
+    const scoring = cfg.scoring || {};
+    const writing = cfg.writing || {};
+
+    const selectedWechatId = linked.wechat_account_id || '';
+
     modal.innerHTML = `
       <div class="agent-modal-overlay" onclick="if(event.target===this)AgentPage.closeSettings()">
-        <div class="agent-modal">
+        <div class="agent-modal" style="max-width: 860px;">
           <div class="agent-modal-header">
-            <h3>Agent 设置</h3>
+            <h3>Agent 设置（ReAct模式）</h3>
             <button class="modal-close" onclick="AgentPage.closeSettings()">✕</button>
           </div>
           <div class="agent-modal-body">
+
             <div class="agent-modal-section">
-              <h4>Prompt 管理</h4>
-              <div class="agent-prompt-list" id="agent-prompt-list">
-                ${prompts.map(p => `
-                  <div class="agent-prompt-item ${p.is_active ? 'active-prompt' : ''}">
-                    <div>
-                      <strong>${escapeHtml(p.name)}</strong>
-                      ${p.is_active ? '<span class="badge badge-green" style="margin-left:4px;">当前</span>' : ''}
-                    </div>
-                    <div class="agent-prompt-actions">
-                      ${!p.is_active ? `<button class="btn btn-sm btn-primary" onclick="AgentPage.activatePrompt(${p.id})">激活</button>` : ''}
-                      <button class="btn btn-sm btn-secondary" onclick="AgentPage.editPrompt(${p.id})">编辑</button>
-                      <button class="btn btn-sm" style="color:#dc2626;" onclick="AgentPage.deletePrompt(${p.id})">删除</button>
-                    </div>
-                  </div>
-                `).join('')}
-              </div>
-              <button class="btn btn-sm btn-secondary" style="margin-top:var(--spacing-sm);" onclick="AgentPage.showPromptForm()">新建 Prompt</button>
-              <div id="agent-prompt-form-area"></div>
-            </div>
-            <div class="agent-modal-section">
-              <h4>调度配置</h4>
-              <div class="agent-schedule-form">
-                <label>运行间隔（分钟）</label>
-                <input type="number" class="input" id="agent-schedule-interval" value="60" min="5" style="width:80px;">
-                <button class="btn btn-sm btn-primary" onclick="AgentPage.saveSchedule()">保存</button>
+              <h4>1. 账号关联</h4>
+              <div class="form-group">
+                <label>关联微信公众号</label>
+                <select class="input" id="cfg-wechat-account">
+                  <option value="">不关联</option>
+                  ${accounts.map(a => `<option value="${a.id}" ${String(a.id)===String(selectedWechatId)?'selected':''}>${escapeHtml(a.name || a.app_id || ('账号'+a.id))}</option>`).join('')}
+                </select>
               </div>
             </div>
+
+            <div class="agent-modal-section">
+              <h4>2. 生成目标</h4>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                <div class="form-group">
+                  <label>生成篇数</label>
+                  <input class="input" id="cfg-target-count" type="number" min="1" max="50" value="${generation.target_count || 10}">
+                </div>
+                <div class="form-group">
+                  <label>最低质量分</label>
+                  <input class="input" id="cfg-min-score" type="number" min="0" max="100" value="${generation.min_quality_score || 60}">
+                </div>
+              </div>
+            </div>
+
+            <div class="agent-modal-section">
+              <h4>3. 话题设置</h4>
+              <div class="form-group">
+                <label>主题关键词（逗号分隔）</label>
+                <input class="input" id="cfg-topic-keywords" value="${escapeHtml((topics.keywords || []).join(','))}" placeholder="AI,科技,商业">
+              </div>
+              <div class="form-group">
+                <label>排除关键词（逗号分隔）</label>
+                <input class="input" id="cfg-topic-excluded" value="${escapeHtml((topics.excluded_keywords || []).join(','))}" placeholder="娱乐八卦,明星绯闻">
+              </div>
+              <div class="form-group">
+                <label>话题描述</label>
+                <textarea class="input" id="cfg-topic-desc" style="min-height:80px;">${escapeHtml(topics.description || '')}</textarea>
+              </div>
+            </div>
+
+            <div class="agent-modal-section">
+              <h4>4. 评分细则</h4>
+              <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;">
+                <div><label style="font-size:12px;">热度</label><input class="input" id="cfg-score-hot" type="number" value="${(scoring.weights||{})['热度价值'] || 25}"></div>
+                <div><label style="font-size:12px;">标题</label><input class="input" id="cfg-score-title" type="number" value="${(scoring.weights||{})['标题质量'] || 20}"></div>
+                <div><label style="font-size:12px;">话题性</label><input class="input" id="cfg-score-topic" type="number" value="${(scoring.weights||{})['话题性'] || 25}"></div>
+                <div><label style="font-size:12px;">内容潜力</label><input class="input" id="cfg-score-content" type="number" value="${(scoring.weights||{})['内容潜力'] || 15}"></div>
+                <div><label style="font-size:12px;">时效性</label><input class="input" id="cfg-score-time" type="number" value="${(scoring.weights||{})['时效性'] || 15}"></div>
+              </div>
+              <div class="form-group" style="margin-top:10px;">
+                <label>自定义评分规则</label>
+                <textarea class="input" id="cfg-score-rules" style="min-height:80px;" placeholder="例如：优先选择含数据分析的话题">${escapeHtml(scoring.custom_rules || '')}</textarea>
+              </div>
+            </div>
+
+            <div class="agent-modal-section">
+              <h4>5. 写作要点</h4>
+              <div class="form-group">
+                <label>写作风格</label>
+                <input class="input" id="cfg-writing-style" value="${escapeHtml(writing.style || 'professional')}" placeholder="professional / casual / analytical">
+              </div>
+              <div class="form-group">
+                <label>撰写要点（每行一个）</label>
+                <textarea class="input" id="cfg-writing-req" style="min-height:80px;" placeholder="开头要有钩子\n包含可执行建议\n结尾引导互动">${escapeHtml((writing.requirements || []).join('\n'))}</textarea>
+              </div>
+              <div class="form-group">
+                <label>避免内容（每行一个）</label>
+                <textarea class="input" id="cfg-writing-avoid" style="min-height:80px;" placeholder="避免空泛陈述\n避免未经证实结论">${escapeHtml((writing.avoid || []).join('\n'))}</textarea>
+              </div>
+            </div>
+
+            <div class="agent-modal-section" style="display:flex;justify-content:flex-end;gap:10px;">
+              <button class="btn btn-secondary" onclick="AgentPage.closeSettings()">取消</button>
+              <button class="btn btn-primary" onclick="AgentPage.saveAgentConfig()">保存配置</button>
+            </div>
+
           </div>
         </div>
       </div>
     `;
+  }
+
+  async function saveAgentConfig() {
+    const data = {
+      linked_accounts: {
+        wechat_account_id: document.getElementById('cfg-wechat-account').value || null,
+      },
+      generation: {
+        target_count: parseInt(document.getElementById('cfg-target-count').value || '10', 10),
+        min_quality_score: parseInt(document.getElementById('cfg-min-score').value || '60', 10),
+      },
+      topics: {
+        keywords: (document.getElementById('cfg-topic-keywords').value || '').split(',').map(s=>s.trim()).filter(Boolean),
+        excluded_keywords: (document.getElementById('cfg-topic-excluded').value || '').split(',').map(s=>s.trim()).filter(Boolean),
+        description: document.getElementById('cfg-topic-desc').value || '',
+      },
+      scoring: {
+        weights: {
+          '热度价值': parseInt(document.getElementById('cfg-score-hot').value || '25', 10),
+          '标题质量': parseInt(document.getElementById('cfg-score-title').value || '20', 10),
+          '话题性': parseInt(document.getElementById('cfg-score-topic').value || '25', 10),
+          '内容潜力': parseInt(document.getElementById('cfg-score-content').value || '15', 10),
+          '时效性': parseInt(document.getElementById('cfg-score-time').value || '15', 10),
+        },
+        custom_rules: document.getElementById('cfg-score-rules').value || '',
+      },
+      writing: {
+        style: document.getElementById('cfg-writing-style').value || 'professional',
+        requirements: (document.getElementById('cfg-writing-req').value || '').split('\n').map(s=>s.trim()).filter(Boolean),
+        avoid: (document.getElementById('cfg-writing-avoid').value || '').split('\n').map(s=>s.trim()).filter(Boolean),
+      }
+    };
+
+    try {
+      const resp = await fetch('/api/agent/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      const result = await resp.json();
+      if (result.success) {
+        alert('Agent配置已保存');
+        agentConfig = result.data;
+        closeSettings();
+      } else {
+        alert('保存失败: ' + (result.error || '未知错误'));
+      }
+    } catch (e) {
+      alert('保存失败: ' + e.message);
+    }
   }
 
   function showPromptForm(promptId) {
@@ -767,7 +894,7 @@ const AgentPage = (() => {
     render, init, manualRun, toggleSchedule,
     switchHistory, reviewArticle, preview,
     switchPreviewTab, closePreview,
-    openSettings, closeSettings,
+    openSettings, closeSettings, saveAgentConfig,
     showPromptForm, editPrompt, savePrompt,
     deletePrompt, activatePrompt, saveSchedule,
     showScoreDetail, publishArticle, revertToDraft,

@@ -91,7 +91,8 @@
       "Bash(sqlite3 data/demo.db \".schema hotnews\")",
       "Bash(pkill -f \"tail -f logs\")",
       "Bash(awk '{print $NF}')",
-      "Bash(node -c static/js/components/wechat-editor.js)"
+      "Bash(node -c static/js/components/wechat-editor.js)",
+      "WebFetch(domain:developers.weixin.qq.com)"
     ]
   }
 }

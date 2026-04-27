@@ -139,10 +139,19 @@ class ArticleGenerator:
 要求：
 - 标题要吸引眼球，适合微信公众号传播
 - 不要使用标题党，保持信息准确
-- 长度控制在15-30个字
+- 长度严格控制在15-20个字以内（微信公众号标题限制60字节，中文约20字）
 - 只输出标题文本，不要加引号或其他标记"""
 
-        return self._call_llm(prompt).strip().strip('"\'""''')
+        title = self._call_llm(prompt).strip().strip('"\'""''')
+
+        # 微信API硬限制：60字节（约20个中文字符）
+        # 按字节截断，不切断多字节字符
+        encoded = title.encode('utf-8')
+        if len(encoded) > 60:
+            title = encoded[:60].decode('utf-8', errors='ignore')
+            logger.warning(f"标题超过60字节，已截断至: {title}")
+
+        return title
 
     def _generate_content(self, news_title: str, summary: str,
                           article_title: str, style: str) -> str:

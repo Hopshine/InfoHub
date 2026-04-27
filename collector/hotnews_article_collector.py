@@ -486,7 +486,7 @@ class HotNewsArticleCollector:
             page = await browser_manager.create_page(context)
 
             logger.info(f"Playwright加载微博页面: {url}")
-            await page.goto(url, wait_until='networkidle', timeout=Config.PLAYWRIGHT_TIMEOUT)
+            await page.goto(url, wait_until='domcontentloaded', timeout=Config.PLAYWRIGHT_TIMEOUT)
 
             # 等待内容加载
             await page.wait_for_timeout(random.randint(2000, 4000))
@@ -653,7 +653,7 @@ class HotNewsArticleCollector:
             page = await browser_manager.create_page(context)
 
             logger.info(f"Playwright加载百度页面: {url}")
-            await page.goto(url, wait_until='networkidle', timeout=Config.PLAYWRIGHT_TIMEOUT)
+            await page.goto(url, wait_until='domcontentloaded', timeout=Config.PLAYWRIGHT_TIMEOUT)
 
             await page.wait_for_timeout(random.randint(1000, 3000))
 
@@ -714,7 +714,8 @@ class HotNewsArticleCollector:
             page = await browser_manager.create_page(context)
 
             logger.info(f"Playwright加载头条页面: {url}")
-            await page.goto(url, wait_until='networkidle', timeout=Config.PLAYWRIGHT_TIMEOUT)
+            # 抖音/头条用 domcontentloaded 避免 networkidle 永远等不完
+            await page.goto(url, wait_until='domcontentloaded', timeout=Config.PLAYWRIGHT_TIMEOUT)
 
             await browser_manager.simulate_human_behavior(page)
 

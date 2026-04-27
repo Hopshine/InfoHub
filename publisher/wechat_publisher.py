@@ -256,20 +256,30 @@ class WeChatPublisher:
     def _build_article_item(self, article: Dict, thumb_media_id: str = '') -> Dict:
         """构建文章数据结构"""
         title = article.get('title', '')
-        # 微信标题限制64个字符
-        if len(title) > 64:
-            title = title[:64]
+        # 微信标题限制：64字节（注意是字节不是字符，中文占3字节）
+        # 按字节截断，保守使用60字节以防边界问题
+        title = self._truncate_by_bytes(title, max_bytes=60)
 
         return {
             'title': title,
             'thumb_media_id': thumb_media_id,  # 必填字段
             'author': article.get('author', 'InfoHub'),
-            'digest': article.get('summary', '')[:120],
+            'digest': self._truncate_by_bytes(article.get('summary', ''), max_bytes=120),
             'content': article.get('content', ''),
             'content_source_url': article.get('source_url', ''),
             'need_open_comment': 0,
             'only_fans_can_comment': 0,
         }
+
+    @staticmethod
+    def _truncate_by_bytes(text: str, max_bytes: int) -> str:
+        """按UTF-8字节数截断字符串，不切断多字节字符"""
+        encoded = text.encode('utf-8')
+        if len(encoded) <= max_bytes:
+            return text
+        # 从后往前找安全截断点
+        truncated = encoded[:max_bytes]
+        return truncated.decode('utf-8', errors='ignore')
 
     def add_draft(self, articles: List[Dict],
                   thumb_media_id: str = '') -> Optional[str]:

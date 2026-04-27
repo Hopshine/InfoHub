@@ -1522,30 +1522,15 @@ async def collect_and_evaluate_topic_async(topic, batch_id, llm_logger, task_id)
     """采集内容后立即用LLM进行评估（含内容的多维度评估）"""
     from agent.topic_evaluator import TopicEvaluator
 
-    # 1. 采集内容
-    try:
-        collect_result = await asyncio.to_thread(
-            hotnews_article_collector.collect_from_hotnews,
-            {
-                'title': topic.get('title', ''),
-                'url': topic.get('url', ''),
-                'source': topic.get('platform', ''),
-            }
-        )
-        if collect_result:
-            topic['_content'] = collect_result.get('content', '')
-    except Exception as e:
-        logger.warning(f"采集内容失败: {topic.get('title', '')[:30]} - {e}")
-
     trending_id = topic.get('id')
 
-    # 防重复：如果已有评估结果，跳过（但保留已采集内容）
+    # 1. 先查评估缓存 — 命中则跳过采集和评估
     if trending_id:
         cached = await asyncio.to_thread(db.get_trending_evaluation, trending_id)
         if cached and cached.get('eval_result'):
             result = cached['eval_result']
             selected = result.get('selected', False)
-            logger.info(f"跳过已评估话题: {topic.get('title', '')[:30]} ({cached.get('eval_grade', '?')}级)")
+            logger.info(f"命中评估缓存: {topic.get('title', '')[:30]} ({cached.get('eval_grade', '?')}级)")
             await asyncio.to_thread(db.update_agent_task, task_id, {
                 'status': 'completed' if selected else 'failed',
                 'output_data': json.dumps(result, ensure_ascii=False),
@@ -1557,12 +1542,35 @@ async def collect_and_evaluate_topic_async(topic, batch_id, llm_logger, task_id)
             topic['_eval_grade'] = result.get('grade', 'C')
             return topic
 
-    # 2. 用LLM评估（包含内容摘要）
+    # 2. 无缓存：采集内容（超时保护，失败不影响后续评估）
+    try:
+        collect_result = await asyncio.wait_for(
+            asyncio.to_thread(
+                hotnews_article_collector.collect_from_hotnews,
+                {
+                    'title': topic.get('title', ''),
+                    'url': topic.get('url', ''),
+                    'source': topic.get('platform', ''),
+                }
+            ),
+            timeout=40.0
+        )
+        if collect_result:
+            topic['_content'] = collect_result.get('content', '')
+    except asyncio.TimeoutError:
+        logger.warning(f"采集超时(40s): {topic.get('title', '')[:30]}")
+        topic['_content'] = ''
+    except Exception as e:
+        logger.warning(f"采集内容失败: {topic.get('title', '')[:30]} - {e}")
+        topic['_content'] = ''
+
+    # 3. LLM评估（包含内容摘要）
     evaluator = TopicEvaluator(db)
     result = await asyncio.to_thread(evaluator.evaluate, topic, llm_logger)
 
     selected = result.get('selected', False)
 
+    # 4. 持久化评估结果
     if trending_id:
         model_name = evaluator.config.get('model', 'unknown') if evaluator.config else 'unknown'
         await asyncio.to_thread(db.save_trending_evaluation, trending_id, result, model_name)
@@ -1581,21 +1589,38 @@ async def collect_and_evaluate_topic_async(topic, batch_id, llm_logger, task_id)
 
 
 async def run_agent_pipeline_async(batch_id):
-    """新流程: 扫描 → 采集+分析评估 → 精选Top10 → 生成文章"""
+    """ReAct Agent流水线 - 通过LangGraph动态决策"""
     from utils.ollama_checker import ensure_ollama_running
-    from generator.article_generator import ArticleGenerator
     from config_loader import LLMConfigLoader
 
     try:
+        logger.info(f"run_agent_pipeline_async 开始: batch_id={batch_id}")
         agent_state['running'] = True
         agent_state['batch_id'] = batch_id
         agent_state['started_at'] = datetime.now().isoformat()
         agent_state['error'] = None
         _reset_nodes()
 
+        logger.info("检查 Ollama 运行状态...")
         await asyncio.to_thread(ensure_ollama_running)
+        logger.info("Ollama 检查完成")
 
-        # ===== Stage 1: Scan (4平台并行) =====
+        # 读取Agent配置
+        agent_config = db.get_agent_config() or {}
+        from models.agent_config import AgentConfig
+        import copy
+        config = copy.deepcopy(AgentConfig.DEFAULT_CONFIG)
+        def deep_merge(base, override):
+            for k, v in override.items():
+                if k in base and isinstance(base[k], dict) and isinstance(v, dict):
+                    deep_merge(base[k], v)
+                else:
+                    base[k] = v
+        deep_merge(config, agent_config)
+
+        target_count = config['generation']['target_count']
+
+        # ===== Stage 1: Scan =====
         _set_node('scan', 'running')
         _update_stage('scan', 'running', total=4)
         platforms = ['weibo', 'zhihu', 'baidu', 'douyin']
@@ -1621,11 +1646,17 @@ async def run_agent_pipeline_async(batch_id):
             count = result.get('count', 0)
             saved = result.get('saved', 0)
             items = result.get('items', [])
-            _update_task(r['id'], 'completed' if not r['error'] else 'failed', r.get('error'))
+            task_status = 'completed' if not r['error'] else 'failed'
+            _update_task(r['id'], task_status, r.get('error'))
+
+            await asyncio.to_thread(db.update_agent_task, r['id'], {
+                'status': task_status,
+                'error_message': r.get('error'),
+                'completed_at': datetime.now().isoformat(),
+                'output_data': json.dumps({'platform': platform, 'count': count, 'saved': saved}, ensure_ascii=False)
+            })
+
             if not r['error']:
-                await asyncio.to_thread(db.update_agent_task, r['id'], {
-                    'output_data': json.dumps({'platform': platform, 'count': count, 'saved': saved}, ensure_ascii=False)
-                })
                 trending.extend(items)
                 completed_scan += 1
         _update_stage('scan', 'completed', total=4, completed=completed_scan)
@@ -1653,11 +1684,10 @@ async def run_agent_pipeline_async(batch_id):
                 return 0
         unique_trending.sort(key=get_hot_value, reverse=True)
         trending = unique_trending
-
         _set_node('scan', 'completed', len(trending))
-        logger.info(f"扫描完成: {len(trending)}条热点（去重后）")
+        logger.info(f"扫描完成: {len(trending)}条热点")
 
-        # ===== Stage 2: 采集+评估 (并行，含内容) =====
+        # ===== Stage 2: 采集+评估 (并行) =====
         _set_node('collect', 'running')
         _update_stage('collect', 'running', total=len(trending))
 
@@ -1668,13 +1698,8 @@ async def run_agent_pipeline_async(batch_id):
             _update_task(tid, 'running')
             await asyncio.to_thread(db.create_agent_task, {
                 'task_key': tid, 'stage': 'collect', 'task_type': 'collect_evaluate',
-                'task_name': topic.get('title', '')[:60],
-                'status': 'running',
-                'input_data': json.dumps({
-                    'title': topic.get('title', ''),
-                    'platform': topic.get('platform', ''),
-                    'hot_value': str(topic.get('hot_value', ''))
-                }, ensure_ascii=False),
+                'task_name': topic.get('title', '')[:60], 'status': 'running',
+                'input_data': json.dumps({'title': topic.get('title', ''), 'platform': topic.get('platform', '')}, ensure_ascii=False),
                 'batch_id': batch_id
             })
             llm_log = LLMLogger(tid, batch_id)
@@ -1697,35 +1722,40 @@ async def run_agent_pipeline_async(batch_id):
 
         _update_stage('collect', 'completed', total=len(trending), completed=collect_completed)
         _set_node('collect', 'completed', len(trending))
+        logger.info(f"采集+评估完成: {collect_completed}/{len(trending)} 通过")
 
-        # ===== Stage 3: 分析评估完成标记 =====
+        # ===== Stage 3: ReAct 精选 (动态决策) =====
         _set_node('analyze', 'running')
         _update_stage('analyze', 'running', total=len(evaluated_topics))
+
+        # 按分数排序
+        evaluated_topics.sort(key=lambda t: t.get('_eval_score', 0), reverse=True)
+
+        # ReAct决策：检查精选话题是否符合账号定位
+        selected_topics = await _react_select_topics(evaluated_topics, config, batch_id)
+
         _set_node('analyze', 'completed', len(evaluated_topics))
         _update_stage('analyze', 'completed', total=len(trending), completed=len(evaluated_topics))
-        logger.info(f"采集+评估完成: {len(evaluated_topics)}/{len(trending)} 通过")
 
-        # ===== Stage 4: 精选 Top 10 =====
         _set_node('select', 'running')
-        evaluated_topics.sort(key=lambda t: t.get('_eval_score', 0), reverse=True)
-        top_topics = evaluated_topics[:10]
-        _set_node('select', 'completed', len(top_topics))
-        _update_stage('select', 'completed', total=len(evaluated_topics), completed=len(top_topics))
-        logger.info(f"精选完成: Top{len(top_topics)} 话题进入写作")
+        _set_node('select', 'completed', len(selected_topics))
+        _update_stage('select', 'completed', total=len(evaluated_topics), completed=len(selected_topics))
+        logger.info(f"ReAct精选完成: {len(selected_topics)}个话题")
 
-        if not top_topics:
-            agent_state['error'] = '没有通过评估的话题，无法生成文章'
+        if not selected_topics:
+            agent_state['error'] = '没有通过精选的话题'
             return
 
-        # ===== Stage 5: 写作 (并行生成文章) =====
+        # ===== Stage 4: 写作 =====
         _set_node('write', 'running')
-        _update_stage('write', 'running', total=len(top_topics))
+        _update_stage('write', 'running', total=len(selected_topics))
 
         llm_config = LLMConfigLoader.get_config(db, 'article_generation')
+        from generator.article_generator import ArticleGenerator
         generator = ArticleGenerator(config=llm_config)
 
         write_tasks = []
-        for i, topic in enumerate(top_topics):
+        for i, topic in enumerate(selected_topics):
             tid = f"write_{i}"
             _register_task(tid, 'write', topic.get('title', '')[:30])
             _update_task(tid, 'running')
@@ -1747,8 +1777,8 @@ async def run_agent_pipeline_async(batch_id):
 
         agent_state['articles_generated'] = articles_done
         _set_node('write', 'completed', articles_done)
-        _update_stage('write', 'completed', total=len(top_topics), completed=articles_done)
-        logger.info(f"写作完成: {articles_done}/{len(top_topics)} 篇文章生成")
+        _update_stage('write', 'completed', total=len(selected_topics), completed=articles_done)
+        logger.info(f"写作完成: {articles_done}/{len(selected_topics)} 篇")
 
     except Exception as e:
         agent_state['error'] = str(e)
@@ -1760,13 +1790,147 @@ async def run_agent_pipeline_async(batch_id):
         agent_state['finished_at'] = datetime.now().isoformat()
 
 
+async def _react_select_topics(evaluated_topics: list, config: dict, batch_id: str) -> list:
+    """
+    ReAct决策：精选话题
+    - 先取Top N候选
+    - 用LLM检查是否符合账号定位和话题要求
+    - 如果不够好，扩大候选范围重新评估
+    """
+    from config_loader import LLMConfigLoader
+
+    target_count = config['generation']['target_count']
+    min_score = config['generation']['min_quality_score']
+    topic_keywords = config['topics'].get('keywords', [])
+    topic_desc = config['topics'].get('description', '')
+    excluded_keywords = config['topics'].get('excluded_keywords', [])
+
+    # 获取关联账号信息
+    account_info = ""
+    account_id = config['linked_accounts'].get('wechat_account_id')
+    if account_id:
+        try:
+            account = db.get_wechat_account(int(account_id))
+            if account:
+                account_info = f"公众号名称：{account.get('name', '')}\n话题关键词：{account.get('topic_keywords', '')}\n风格偏好：{account.get('style_preference', '')}"
+        except:
+            pass
+
+    # 过滤掉排除关键词
+    if excluded_keywords:
+        evaluated_topics = [
+            t for t in evaluated_topics
+            if not any(kw in t.get('title', '') for kw in excluded_keywords)
+        ]
+
+    # 如果没有配置关键词和账号，直接取Top N
+    if not topic_keywords and not topic_desc and not account_info:
+        return evaluated_topics[:target_count]
+
+    # ReAct循环：最多3轮
+    candidate_pool_size = target_count * 2
+    for react_round in range(3):
+        candidates = evaluated_topics[:candidate_pool_size]
+        if not candidates:
+            break
+
+        # 构建LLM判断提示
+        llm_config = LLMConfigLoader.get_config(db, 'article_generation')
+        try:
+            from openai import OpenAI
+            client = OpenAI(
+                api_key=llm_config['api_key'],
+                base_url=llm_config.get('base_url') or None
+            )
+
+            candidates_text = "\n".join([
+                f"{i}. [{t.get('_eval_grade','?')}级/{t.get('_eval_score',0)}分] {t.get('title','')}"
+                for i, t in enumerate(candidates)
+            ])
+
+            prompt = f"""你是内容策划专家，需要从候选话题中精选{target_count}个最适合的话题。
+
+账号定位：
+{account_info if account_info else '（未设置）'}
+
+话题要求：
+- 描述：{topic_desc if topic_desc else '（未设置）'}
+- 关键词：{', '.join(topic_keywords) if topic_keywords else '（未设置）'}
+- 最低分数：{min_score}
+
+候选话题（共{len(candidates)}个）：
+{candidates_text}
+
+请分析每个话题是否符合账号定位，选出最合适的{target_count}个。
+如果候选话题整体质量不够，请说明原因。
+
+返回JSON格式：
+{{
+  "selected_indices": [0, 2, 5, ...],
+  "quality_ok": true/false,
+  "reason": "说明"
+}}"""
+
+            response = client.chat.completions.create(
+                model=llm_config['model'],
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,
+                max_tokens=500
+            )
+
+            content = response.choices[0].message.content.strip()
+            if '```json' in content:
+                content = content.split('```json')[1].split('```')[0].strip()
+            elif '```' in content:
+                content = content.split('```')[1].split('```')[0].strip()
+
+            result = json.loads(content)
+            selected_indices = result.get('selected_indices', [])
+            quality_ok = result.get('quality_ok', True)
+
+            selected = [candidates[i] for i in selected_indices if i < len(candidates)]
+
+            if quality_ok and len(selected) >= target_count:
+                logger.info(f"ReAct第{react_round+1}轮精选成功: {len(selected)}个话题")
+                return selected[:target_count]
+            else:
+                # 质量不够，扩大候选范围
+                logger.info(f"ReAct第{react_round+1}轮精选不足({len(selected)}/{target_count})，扩大范围")
+                candidate_pool_size = min(candidate_pool_size + target_count, len(evaluated_topics))
+
+        except Exception as e:
+            logger.warning(f"ReAct精选LLM调用失败: {e}，降级为直接取Top N")
+            break
+
+    # 降级：直接取Top N
+    return evaluated_topics[:target_count]
+
+
+
 def run_agent_pipeline(batch_id):
     """Sync wrapper that creates an event loop for the async pipeline."""
+    import concurrent.futures
+    logger.info(f"run_agent_pipeline 线程启动: batch_id={batch_id}")
     loop = asyncio.new_event_loop()
+    # 给 loop 绑定独立的 executor，避免使用主线程的默认 executor
+    # 防止 Flask reloader 关闭主线程 executor 时报 "cannot schedule new futures after shutdown"
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=20, thread_name_prefix='agent_worker')
+    loop.set_default_executor(executor)
     try:
+        logger.info(f"开始执行 run_agent_pipeline_async: batch_id={batch_id}")
         loop.run_until_complete(run_agent_pipeline_async(batch_id))
+        logger.info(f"run_agent_pipeline_async 执行完成: batch_id={batch_id}")
+    except Exception as e:
+        logger.error(f"run_agent_pipeline 异常: {e}", exc_info=True)
+        agent_state['error'] = str(e)
+        agent_state['running'] = False
     finally:
+        try:
+            executor.shutdown(wait=False)
+        except Exception:
+            pass
         loop.close()
+        logger.info(f"run_agent_pipeline 线程结束: batch_id={batch_id}")
 
 
 def agent_schedule_tick():
@@ -1790,6 +1954,7 @@ def agent_run():
     if agent_state['running']:
         return jsonify({'success': False, 'error': 'Agent正在运行中'})
     batch_id = f"manual_{uuid.uuid4().hex[:8]}"
+    logger.info(f"手动触发Agent运行: batch_id={batch_id}")
     threading.Thread(target=run_agent_pipeline, args=(batch_id,), daemon=True).start()
     return jsonify({'success': True, 'data': {'batch_id': batch_id}})
 
@@ -1860,52 +2025,30 @@ def agent_llm_logs(task_id):
 
 @app.route('/api/agent/workflows/<batch_id>')
 def agent_workflows_by_batch(batch_id):
-    """获取指定batch的所有workflow列表（DAG可视化数据）"""
+    """获取指定batch的DAG可视化数据（新流水线：直接返回nodes状态）"""
     try:
-        workflows = db.get_topic_workflows_by_batch(batch_id) if hasattr(db, 'get_topic_workflows_by_batch') else []
-
-        # 解析JSON字段
-        for wf in workflows:
-            for field in ['collect_result', 'analysis_result', 'plan_result', 'decisions']:
-                val = wf.get(field)
-                if isinstance(val, str) and val:
-                    try:
-                        wf[field] = json.loads(val)
-                    except Exception:
-                        pass
-
-        # 获取compose状态
-        drafts = db.get_wechat_drafts_by_batch(batch_id) if hasattr(db, 'get_wechat_drafts_by_batch') else []
-        compose = {
-            'status': 'completed' if drafts else 'pending',
-            'selected_articles': [],
-            'draft_id': drafts[0]['id'] if drafts else None
-        }
-        if drafts:
-            try:
-                article_ids = json.loads(drafts[0].get('article_ids', '[]'))
-                compose['selected_articles'] = article_ids
-                compose['article_count'] = drafts[0].get('article_count', 0)
-                compose['title'] = drafts[0].get('title', '')
-            except Exception:
-                pass
-
-        # 统计
-        total = len(workflows)
-        completed = sum(1 for w in workflows if w.get('status') == 'completed')
-        failed = sum(1 for w in workflows if w.get('status') == 'failed')
-
-        return jsonify({
-            'success': True,
-            'data': {
-                'batch_id': batch_id,
-                'total_topics': total,
-                'completed_topics': completed,
-                'failed_topics': failed,
-                'workflows': workflows,
-                'compose': compose
-            }
-        })
+        # 新流水线：直接返回agent_state的nodes
+        if agent_state.get('batch_id') == batch_id:
+            return jsonify({
+                'success': True,
+                'data': {
+                    'batch_id': batch_id,
+                    'nodes': agent_state.get('nodes', {}),
+                    'stages': agent_state.get('stages', {}),
+                    'articles_generated': agent_state.get('articles_generated', 0),
+                }
+            })
+        else:
+            # 历史batch：返回空数据（旧数据不兼容）
+            return jsonify({
+                'success': True,
+                'data': {
+                    'batch_id': batch_id,
+                    'nodes': {},
+                    'stages': {},
+                    'articles_generated': 0,
+                }
+            })
     except Exception as e:
         logger.error(f"Get workflows error: {e}")
         return jsonify({'success': False, 'error': str(e)})
@@ -2244,6 +2387,71 @@ def submit_evaluation_feedback():
         'success': success,
         'message': '反馈已收到，将用于优化评估模型'
     })
+
+
+# ==================== Agent 配置 API ====================
+
+DEFAULT_AGENT_CONFIG = {
+    'linked_accounts': {
+        'wechat_account_id': None,
+    },
+    'generation': {
+        'target_count': 10,
+        'min_quality_score': 60,
+    },
+    'topics': {
+        'keywords': [],
+        'excluded_keywords': [],
+        'categories': [],
+        'description': '',
+    },
+    'scoring': {
+        'weights': {
+            '热度价值': 25,
+            '标题质量': 20,
+            '话题性': 25,
+            '内容潜力': 15,
+            '时效性': 15,
+        },
+        'pass_threshold': 60,
+        'custom_rules': '',
+    },
+    'writing': {
+        'style': 'professional',
+        'tone': 'neutral',
+        'length': 'medium',
+        'requirements': [],
+        'avoid': [],
+    },
+}
+
+
+@app.route('/api/agent/config', methods=['GET'])
+def agent_config_get():
+    """获取Agent配置"""
+    config = db.get_agent_config()
+    if not config:
+        config = DEFAULT_AGENT_CONFIG.copy()
+    return jsonify({'success': True, 'data': config})
+
+
+@app.route('/api/agent/config', methods=['POST'])
+def agent_config_save():
+    """保存Agent配置"""
+    data = request.json or {}
+    # 合并默认值
+    import copy
+    config = copy.deepcopy(DEFAULT_AGENT_CONFIG)
+    def deep_merge(base, override):
+        for k, v in override.items():
+            if k in base and isinstance(base[k], dict) and isinstance(v, dict):
+                deep_merge(base[k], v)
+            else:
+                base[k] = v
+    deep_merge(config, data)
+    db.save_agent_config(config)
+    return jsonify({'success': True, 'data': config})
+
 
 
 @app.route('/api/agent/evaluation/stats', methods=['GET'])

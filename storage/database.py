@@ -442,7 +442,14 @@ class Database:
             )
         ''')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_media_cache_url ON wechat_media_cache(url)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_media_cache_created ON wechat_media_cache(created_at)')
+        # Agent配置表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS agent_configs (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                config_json TEXT NOT NULL,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
 
         conn.commit()
         conn.close()
@@ -2069,3 +2076,36 @@ class Database:
         conn.commit()
         conn.close()
         return deleted
+
+    # ==================== Agent Config ====================
+
+    def get_agent_config(self) -> Optional[Dict]:
+        """获取Agent配置"""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute('SELECT config_json FROM agent_configs WHERE id = 1')
+        row = cursor.fetchone()
+        conn.close()
+        if row:
+            try:
+                return json.loads(row['config_json'])
+            except:
+                return None
+        return None
+
+    def save_agent_config(self, config: Dict):
+        """保存Agent配置"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        config_json = json.dumps(config, ensure_ascii=False)
+        cursor.execute('''
+            INSERT INTO agent_configs (id, config_json, updated_at)
+            VALUES (1, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(id) DO UPDATE SET
+                config_json = excluded.config_json,
+                updated_at = CURRENT_TIMESTAMP
+        ''', (config_json,))
+        conn.commit()
+        conn.close()
+
